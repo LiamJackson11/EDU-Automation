@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- Views/ReviewPage.xaml -->
+<!-- CRITICAL: This page is the mandatory approval workflow gate.           -->
+<!-- The Submit button is ONLY enabled after the user explicitly approves.  -->
+
+<ContentPage
+    x:Class="EduAutomation.Views.ReviewPage"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:vm="clr-namespace:EduAutomation.ViewModels"
+    Title="Review and Submit">
+
+    <Grid ColumnDefinitions="280,*" ColumnSpacing="0">
+
+        <!-- Left Panel: Queue of pending review items -->
+        <Grid Grid.Column="0" RowDefinitions="Auto,*"
+              BackgroundColor="{AppThemeBinding Light=#f5f5f5, Dark=#1a1a2e}">
+
+            <Label Grid.Row="0" Text="Pending Review"
+                   FontSize="14" FontAttributes="Bold"
+                   Padding="16,12" />
+
+            <CollectionView Grid.Row="1"
+                            ItemsSource="{Binding PendingReviewItems}"
+                            SelectedItem="{Binding SelectedReviewItem}"
+                            SelectionMode="Single"
+                            EmptyView="No items pending review.">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <Border Padding="12,10" Margin="8,4"
+                                StrokeShape="RoundRectangle 8"
+                                BackgroundColor="{AppThemeBinding Light=White, Dark=#252540}">
+                            <VerticalStackLayout Spacing="4">
+                                <Label Text="{Binding SourceAssignment.Title}"
+                                       FontSize="13" FontAttributes="Bold"
+                                       MaxLines="2" LineBreakMode="TailTruncation" />
+                                <Label Text="{Binding SourceAssignment.CourseName}"
+                                       FontSize="11" TextColor="Gray" />
+                                <Label Text="{Binding Status}"
+                                       FontSize="10" TextColor="#3f51b5"
+                                       FontAttributes="Italic" />
+                            </VerticalStackLayout>
+                        </Border>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+        </Grid>
+
+        <!-- Right Panel: Content Editor and Approval Controls -->
+        <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto,Auto,Auto,Auto"
+              RowSpacing="12" Padding="16">
+
+            <!-- Assignment Title Header -->
+            <VerticalStackLayout Grid.Row="0">
+                <Label Text="{Binding SelectedReviewItem.SourceAssignment.Title}"
+                       FontSize="18" FontAttributes="Bold"
+                       IsVisible="{Binding SelectedReviewItem, Converter={StaticResource NotNullConverter}}" />
+                <Label Text="{Binding SelectedReviewItem.SourceAssignment.CourseName}"
+                       FontSize="13" TextColor="Gray"
+                       IsVisible="{Binding SelectedReviewItem, Converter={StaticResource NotNullConverter}}" />
+                <Label Text="Select an item from the queue to review."
+                       FontSize="14" TextColor="Gray"
+                       IsVisible="{Binding SelectedReviewItem, Converter={StaticResource NullConverter}}" />
+            </VerticalStackLayout>
+
+            <!-- AI Content Editor -->
+            <!-- The user can freely edit this content before approving. -->
+            <Border Grid.Row="1" StrokeShape="RoundRectangle 8"
+                    IsVisible="{Binding SelectedReviewItem, Converter={StaticResource NotNullConverter}}">
+                <Editor
+                    Text="{Binding SelectedReviewItem.EditedContent, Mode=TwoWay}"
+                    Placeholder="AI-generated content will appear here for your review and editing."
+                    AutoSize="TextChanges"
+                    FontSize="14"
+                    Margin="4" />
+            </Border>
+
+            <!-- AI Metadata -->
+            <HorizontalStackLayout Grid.Row="2" Spacing="16"
+                IsVisible="{Binding SelectedReviewItem, Converter={StaticResource NotNullConverter}}">
+                <Label Text="{Binding SelectedReviewItem.AiModelUsed, StringFormat='Model: {0}'}"
+                       FontSize="11" TextColor="Gray" />
+                <Label Text="{Binding SelectedReviewItem.TotalTokensUsed, StringFormat='Tokens: {0}'}"
+                       FontSize="11" TextColor="Gray" />
+                <Label Text="{Binding SelectedReviewItem.GeneratedAt, StringFormat='Generated: {0:g}'}"
+                       FontSize="11" TextColor="Gray" />
+            </HorizontalStackLayout>
+
+            <!-- Approval / Rejection Controls -->
+            <Grid Grid.Row="3" ColumnDefinitions="*,*" ColumnSpacing="12"
+                  IsVisible="{Binding SelectedReviewItem, Converter={StaticResource NotNullConverter}}">
+
+                <!-- Approve Button -->
+                <Button Grid.Column="0"
+                        Text="Approve Content"
+                        Command="{Binding ApproveContentCommand}"
+                        IsEnabled="{Binding IsNotBusy}"
+                        BackgroundColor="#4caf50" TextColor="White"
+                        CornerRadius="8" HeightRequest="48" />
+
+                <!-- Reject Button -->
+                <Button Grid.Column="1"
+                        Text="Reject / Edit More"
+                        Command="{Binding RejectContentCommand}"
+                        IsEnabled="{Binding IsNotBusy}"
+                        BackgroundColor="#ff7043" TextColor="White"
+                        CornerRadius="8" HeightRequest="48" />
+            </Grid>
+
+            <!-- Submit to Canvas Button -->
+            <!-- DISABLED until IsApprovedByUser is true and CanSubmit is true. -->
+            <Button Grid.Row="4"
+                    Text="Submit to Canvas"
+                    Command="{Binding SubmitToCanvasCommand}"
+                    IsEnabled="{Binding CanSubmit}"
+                    IsVisible="{Binding SelectedReviewItem, Converter={StaticResource NotNullConverter}}"
+                    BackgroundColor="#3f51b5"
+                    TextColor="White"
+                    CornerRadius="8"
+                    HeightRequest="52"
+                    FontSize="16"
+                    FontAttributes="Bold" />
+
+            <!-- Approval required notice (shown when not yet approved) -->
+            <Border Grid.Row="4"
+                    BackgroundColor="#fff8e1"
+                    StrokeShape="RoundRectangle 8"
+                    Padding="12"
+                    IsVisible="{Binding CanSubmit, Converter={StaticResource InvertBoolConverter}}">
+                <Label Text="You must read and click Approve before you can submit. This ensures you have reviewed all AI-generated content."
+                       FontSize="12" TextColor="#f57f17"
+                       HorizontalTextAlignment="Center" />
+            </Border>
+
+            <!-- Status and Error Display -->
+            <VerticalStackLayout Grid.Row="5" Spacing="8">
+                <Label Text="{Binding StatusMessage}" FontSize="13"
+                       TextColor="{AppThemeBinding Light=#333, Dark=#ccc}" />
+                <ActivityIndicator IsRunning="{Binding IsBusy}" IsVisible="{Binding IsBusy}"
+                                   Color="#3f51b5" />
+                <Border IsVisible="{Binding HasError}"
+                        BackgroundColor="#ffebee" StrokeShape="RoundRectangle 8" Padding="10">
+                    <Label Text="{Binding ErrorMessage}" TextColor="#c62828" FontSize="13" />
+                </Border>
+            </VerticalStackLayout>
+
+        </Grid>
+    </Grid>
+</ContentPage>

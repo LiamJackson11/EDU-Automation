@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- Views/DataDumpPage.xaml -->
+
+<ContentPage
+    x:Class="EduAutomation.Views.DataDumpPage"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:vm="clr-namespace:EduAutomation.ViewModels"
+    xmlns:models="clr-namespace:EduAutomation.Models"
+    Title="Data Dump">
+
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto" Padding="16" RowSpacing="12">
+
+        <!-- Description -->
+        <Label Grid.Row="0"
+               Text="Paste raw notes, Google Doc links, or voice transcripts here to help complete your assignments."
+               FontSize="13" TextColor="Gray" />
+
+        <!-- Input Type Picker -->
+        <Picker Grid.Row="1"
+                Title="Input Type"
+                SelectedItem="{Binding SelectedInputType}">
+            <Picker.ItemsSource>
+                <x:Array Type="{x:Type models:DataDumpType}">
+                    <models:DataDumpType>RawText</models:DataDumpType>
+                    <models:DataDumpType>GoogleDocsUrl</models:DataDumpType>
+                    <models:DataDumpType>VoiceTranscript</models:DataDumpType>
+                    <models:DataDumpType>PastedLink</models:DataDumpType>
+                </x:Array>
+            </Picker.ItemsSource>
+        </Picker>
+
+        <!-- Text Input Area -->
+        <Border Grid.Row="2" StrokeShape="RoundRectangle 8"
+                BackgroundColor="{AppThemeBinding Light=White, Dark=#1e1e2e}">
+            <Editor
+                Text="{Binding InputText}"
+                Placeholder="Paste text, a Google Doc URL, or a voice transcript here..."
+                HeightRequest="120"
+                FontSize="14"
+                Margin="4" />
+        </Border>
+
+        <!-- Assignment Linker -->
+        <Picker Grid.Row="3"
+                Title="Link to Assignment (required for generation)"
+                ItemsSource="{Binding AvailableAssignments}"
+                SelectedItem="{Binding LinkedAssignment}"
+                ItemDisplayBinding="{Binding Title}" />
+
+        <!-- Data Dump Items List -->
+        <CollectionView Grid.Row="4"
+                        ItemsSource="{Binding DumpItems}"
+                        EmptyView="No data added yet. Add items above.">
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border Padding="12,8" Margin="0,4"
+                            StrokeShape="RoundRectangle 8"
+                            BackgroundColor="{AppThemeBinding Light=#f5f5f5, Dark=#252540}">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <VerticalStackLayout Grid.Column="0">
+                                <Label Text="{Binding DisplayLabel}" FontSize="11"
+                                       TextColor="#3f51b5" FontAttributes="Bold" />
+                                <Label Text="{Binding RawContent}" FontSize="13"
+                                       MaxLines="2" LineBreakMode="TailTruncation" />
+                                <Label Text="{Binding AddedAt, StringFormat='Added: {0:g}'}"
+                                       FontSize="10" TextColor="Gray" />
+                            </VerticalStackLayout>
+                            <Button Grid.Column="1" Text="X"
+                                    Command="{Binding Source={RelativeSource AncestorType={x:Type vm:DataDumpViewModel}}, Path=RemoveItemCommand}"
+                                    CommandParameter="{Binding .}"
+                                    BackgroundColor="Transparent"
+                                    TextColor="Red"
+                                    WidthRequest="36" HeightRequest="36" />
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+
+        <!-- Action Buttons -->
+        <Grid Grid.Row="5" ColumnDefinitions="*,*" ColumnSpacing="12">
+            <Button Grid.Column="0"
+                    Text="Add to Dump"
+                    Command="{Binding AddDataItemCommand}"
+                    IsEnabled="{Binding IsNotBusy}"
+                    BackgroundColor="#607d8b" TextColor="White"
+                    CornerRadius="8" HeightRequest="44" />
+            <Button Grid.Column="1"
+                    Text="Generate with Data"
+                    Command="{Binding GenerateWithDumpDataCommand}"
+                    IsEnabled="{Binding IsNotBusy}"
+                    BackgroundColor="#4caf50" TextColor="White"
+                    CornerRadius="8" HeightRequest="44" />
+        </Grid>
+
+        <!-- Status and Error -->
+        <VerticalStackLayout Grid.Row="6" Spacing="8">
+            <Label Text="{Binding StatusMessage}" FontSize="13" TextColor="Gray" />
+            <ActivityIndicator IsRunning="{Binding IsBusy}" IsVisible="{Binding IsBusy}"
+                               Color="#3f51b5" />
+            <Border IsVisible="{Binding HasError}"
+                    BackgroundColor="#ffebee" StrokeShape="RoundRectangle 8" Padding="10">
+                <Label Text="{Binding ErrorMessage}" TextColor="#c62828" FontSize="13" />
+            </Border>
+        </VerticalStackLayout>
+
+    </Grid>
+</ContentPage>
+
+<!-- ============================================================ -->
+
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- Views/GmailPage.xaml -->
+
+<ContentPage
+    x:Class="EduAutomation.Views.GmailPage"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:vm="clr-namespace:EduAutomation.ViewModels"
+    Title="Gmail Alerts">
+
+    <Grid RowDefinitions="Auto,*,Auto" Padding="16" RowSpacing="12">
+
+        <!-- Connect / Disconnect Header -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+            <Label Grid.Column="0"
+                   Text="{Binding IsAuthenticated, Converter={StaticResource BoolToColorConverter}}"
+                   FontSize="14" VerticalOptions="Center" />
+            <Button Grid.Column="1"
+                    Text="{Binding IsAuthenticated, Converter={StaticResource BoolToColorConverter}}"
+                    Command="{Binding ConnectGmailCommand}"
+                    BackgroundColor="#3f51b5" TextColor="White"
+                    CornerRadius="8" HeightRequest="40"
+                    IsVisible="{Binding IsAuthenticated, Converter={StaticResource InvertBoolConverter}}" />
+            <Button Grid.Column="1"
+                    Text="Disconnect"
+                    Command="{Binding DisconnectGmailCommand}"
+                    BackgroundColor="#f44336" TextColor="White"
+                    CornerRadius="8" HeightRequest="40"
+                    IsVisible="{Binding IsAuthenticated}" />
+        </Grid>
+
+        <!-- Email List -->
+        <CollectionView Grid.Row="1"
+                        ItemsSource="{Binding Emails}"
+                        SelectedItem="{Binding SelectedEmail}"
+                        SelectionMode="Single"
+                        EmptyView="No school-related emails found. Connect your Gmail account above.">
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border Padding="14,10" Margin="0,4"
+                            StrokeShape="RoundRectangle 10"
+                            BackgroundColor="{AppThemeBinding Light=White, Dark=#1e1e2e}">
+                        <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
+                            <Label Grid.Row="0" Text="{Binding Subject}"
+                                   FontSize="14" FontAttributes="Bold"
+                                   MaxLines="1" LineBreakMode="TailTruncation" />
+                            <Label Grid.Row="1" Text="{Binding Sender}"
+                                   FontSize="12" TextColor="Gray" />
+                            <Label Grid.Row="2" Text="{Binding SnippetPreview}"
+                                   FontSize="12" TextColor="DarkGray"
+                                   MaxLines="2" LineBreakMode="TailTruncation" />
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+
+        <!-- Refresh Button -->
+        <Button Grid.Row="2"
+                Text="Refresh Emails"
+                Command="{Binding LoadEmailsCommand}"
+                IsEnabled="{Binding IsNotBusy}"
+                IsVisible="{Binding IsAuthenticated}"
+                BackgroundColor="#3f51b5" TextColor="White"
+                CornerRadius="8" HeightRequest="44" />
+
+    </Grid>
+</ContentPage>

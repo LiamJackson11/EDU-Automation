@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- AppShell.xaml -->
+<!-- Defines the tabbed navigation structure for EduAutomation. -->
+<!-- Each tab maps to a registered page via Shell routing. -->
+
+<Shell
+    x:Class="EduAutomation.AppShell"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:views="clr-namespace:EduAutomation.Views"
+    Shell.NavBarIsVisible="True"
+    Title="EduAutomation"
+    FlyoutBehavior="Disabled">
+
+    <!-- Tab bar displayed at the bottom on mobile, top on desktop. -->
+    <TabBar>
+
+        <!-- Tab 1: Dashboard -->
+        <ShellContent
+            Title="Dashboard"
+            ContentTemplate="{DataTemplate views:DashboardPage}"
+            Route="dashboard">
+            <ShellContent.Icon>
+                <FontImageSource
+                    FontFamily="MaterialIcons"
+                    Glyph="&#xe88a;"
+                    Color="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}" />
+            </ShellContent.Icon>
+        </ShellContent>
+
+        <!-- Tab 2: Gmail Alerts -->
+        <ShellContent
+            Title="Gmail"
+            ContentTemplate="{DataTemplate views:GmailPage}"
+            Route="gmail">
+            <ShellContent.Icon>
+                <FontImageSource
+                    FontFamily="MaterialIcons"
+                    Glyph="&#xe158;"
+                    Color="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}" />
+            </ShellContent.Icon>
+        </ShellContent>
+
+        <!-- Tab 3: Missing Assignments -->
+        <ShellContent
+            Title="Assignments"
+            ContentTemplate="{DataTemplate views:AssignmentsPage}"
+            Route="assignments">
+            <ShellContent.Icon>
+                <FontImageSource
+                    FontFamily="MaterialIcons"
+                    Glyph="&#xe616;"
+                    Color="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}" />
+            </ShellContent.Icon>
+        </ShellContent>
+
+        <!-- Tab 4: Data Dump -->
+        <ShellContent
+            Title="Data Dump"
+            ContentTemplate="{DataTemplate views:DataDumpPage}"
+            Route="datadump">
+            <ShellContent.Icon>
+                <FontImageSource
+                    FontFamily="MaterialIcons"
+                    Glyph="&#xe226;"
+                    Color="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}" />
+            </ShellContent.Icon>
+        </ShellContent>
+
+        <!-- Tab 5: Review and Submit -->
+        <ShellContent
+            Title="Review"
+            ContentTemplate="{DataTemplate views:ReviewPage}"
+            Route="review">
+            <ShellContent.Icon>
+                <FontImageSource
+                    FontFamily="MaterialIcons"
+                    Glyph="&#xe877;"
+                    Color="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}" />
+            </ShellContent.Icon>
+        </ShellContent>
+
+    </TabBar>
+
+</Shell>

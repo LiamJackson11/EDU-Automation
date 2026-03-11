@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- Views/DashboardPage.xaml -->
+
+<ContentPage
+    x:Class="EduAutomation.Views.DashboardPage"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:vm="clr-namespace:EduAutomation.ViewModels"
+    Title="Dashboard">
+
+    <ContentPage.BindingContext>
+        <vm:DashboardViewModel />
+    </ContentPage.BindingContext>
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20" Spacing="16">
+
+            <!-- Header -->
+            <Label
+                Text="{Binding WelcomeMessage}"
+                FontSize="24"
+                FontAttributes="Bold"
+                TextColor="{AppThemeBinding Light=#1a1a2e, Dark=#e0e0e0}" />
+
+            <Label
+                Text="Here is your school overview for today."
+                FontSize="14"
+                TextColor="{AppThemeBinding Light=#666, Dark=#aaa}" />
+
+            <!-- Status Cards Row -->
+            <Grid ColumnDefinitions="*,*,*" ColumnSpacing="12">
+
+                <!-- Missing Assignments Card -->
+                <Border Grid.Column="0" StrokeShape="RoundRectangle 12" BackgroundColor="#fff3e0" Padding="12">
+                    <VerticalStackLayout>
+                        <Label Text="{Binding MissingAssignmentCount}" FontSize="28"
+                               FontAttributes="Bold" TextColor="#e65100" HorizontalOptions="Center" />
+                        <Label Text="Missing" FontSize="11" TextColor="#e65100"
+                               HorizontalOptions="Center" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <!-- Unread Alerts Card -->
+                <Border Grid.Column="1" StrokeShape="RoundRectangle 12" BackgroundColor="#e8f5e9" Padding="12">
+                    <VerticalStackLayout>
+                        <Label Text="{Binding UnreadAlertCount}" FontSize="28"
+                               FontAttributes="Bold" TextColor="#1b5e20" HorizontalOptions="Center" />
+                        <Label Text="Alerts" FontSize="11" TextColor="#1b5e20"
+                               HorizontalOptions="Center" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <!-- Pending Review Card -->
+                <Border Grid.Column="2" StrokeShape="RoundRectangle 12" BackgroundColor="#e3f2fd" Padding="12">
+                    <VerticalStackLayout>
+                        <Label Text="{Binding PendingReviewCount}" FontSize="28"
+                               FontAttributes="Bold" TextColor="#0d47a1" HorizontalOptions="Center" />
+                        <Label Text="Review" FontSize="11" TextColor="#0d47a1"
+                               HorizontalOptions="Center" />
+                    </VerticalStackLayout>
+                </Border>
+
+            </Grid>
+
+            <!-- Connection Status -->
+            <Border StrokeShape="RoundRectangle 12" Padding="16"
+                    BackgroundColor="{AppThemeBinding Light=#f8f9fa, Dark=#2a2a3e}">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Service Connections" FontSize="14" FontAttributes="Bold" />
+                    <HorizontalStackLayout Spacing="8">
+                        <Ellipse WidthRequest="10" HeightRequest="10"
+                                 Fill="{Binding IsCanvasConnected, Converter={StaticResource BoolToColorConverter}}" />
+                        <Label Text="Canvas LMS" FontSize="13" />
+                    </HorizontalStackLayout>
+                    <HorizontalStackLayout Spacing="8">
+                        <Ellipse WidthRequest="10" HeightRequest="10"
+                                 Fill="{Binding IsGmailConnected, Converter={StaticResource BoolToColorConverter}}" />
+                        <Label Text="Gmail" FontSize="13" />
+                    </HorizontalStackLayout>
+                    <HorizontalStackLayout Spacing="8">
+                        <Ellipse WidthRequest="10" HeightRequest="10"
+                                 Fill="{Binding IsIcConnected, Converter={StaticResource BoolToColorConverter}}" />
+                        <Label Text="Infinite Campus" FontSize="13" />
+                    </HorizontalStackLayout>
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Recent Missing Assignments -->
+            <Label Text="Recent Missing Assignments" FontSize="16" FontAttributes="Bold" />
+
+            <CollectionView
+                ItemsSource="{Binding RecentMissingAssignments}"
+                EmptyView="No missing assignments. Great work!">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <Border StrokeShape="RoundRectangle 8" Padding="12" Margin="0,4"
+                                BackgroundColor="{AppThemeBinding Light=White, Dark=#1e1e2e}">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <VerticalStackLayout Grid.Column="0">
+                                    <Label Text="{Binding Title}" FontSize="14"
+                                           FontAttributes="Bold" />
+                                    <Label Text="{Binding CourseName}" FontSize="12"
+                                           TextColor="Gray" />
+                                    <Label Text="{Binding DueDateDisplay}" FontSize="12"
+                                           TextColor="#e65100" />
+                                </VerticalStackLayout>
+                                <Label Grid.Column="1" Text="MISSING"
+                                       FontSize="10" TextColor="White"
+                                       BackgroundColor="#e65100" Padding="6,3"
+                                       VerticalOptions="Start" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+
+            <!-- Refresh Button -->
+            <Button
+                Text="Refresh Dashboard"
+                Command="{Binding RefreshDashboardCommand}"
+                IsEnabled="{Binding IsNotBusy}"
+                BackgroundColor="#3f51b5"
+                TextColor="White"
+                CornerRadius="8"
+                HeightRequest="48" />
+
+            <!-- Loading indicator -->
+            <ActivityIndicator
+                IsRunning="{Binding IsBusy}"
+                IsVisible="{Binding IsBusy}"
+                Color="#3f51b5" />
+
+            <!-- Error display -->
+            <Border IsVisible="{Binding HasError}"
+                    BackgroundColor="#ffebee"
+                    StrokeShape="RoundRectangle 8" Padding="12">
+                <Label Text="{Binding ErrorMessage}" TextColor="#c62828" FontSize="13" />
+            </Border>
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

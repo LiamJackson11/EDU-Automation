@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EduAutomation", "EduAutomation.csproj", "{3524DB98-66DD-D5A2-186A-B860459706FF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EduAutomation.Tests", "EduAutomation.Tests.csproj", "{70B9AF0D-7387-C08E-DCCA-A467380DFE55}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3524DB98-66DD-D5A2-186A-B860459706FF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3524DB98-66DD-D5A2-186A-B860459706FF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3524DB98-66DD-D5A2-186A-B860459706FF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3524DB98-66DD-D5A2-186A-B860459706FF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{70B9AF0D-7387-C08E-DCCA-A467380DFE55}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{70B9AF0D-7387-C08E-DCCA-A467380DFE55}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{70B9AF0D-7387-C08E-DCCA-A467380DFE55}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{70B9AF0D-7387-C08E-DCCA-A467380DFE55}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {846F376D-01DA-451C-A243-28F75F56F491}
+	EndGlobalSection
+EndGlobal

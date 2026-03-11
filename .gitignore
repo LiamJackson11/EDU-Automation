@@ -1,0 +1,47 @@
+# ============================
+# EduAutomation .gitignore
+# ============================
+
+# API Credentials - NEVER commit these
+**/Resources/Raw/google_credentials.json
+**/*.user.json
+**/appsettings.Development.json
+**/.env
+**/secrets.json
+**/*_secrets.json
+
+# Build outputs
+**/bin/
+**/obj/
+**/.vs/
+**/*.user
+**/TestResults/
+
+# macOS
+.DS_Store
+*.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+
+# Rider/JetBrains
+.idea/
+*.sln.iml
+
+# NuGet
+*.nupkg
+**/packages/
+!**/packages/build/
+
+# MAUI platform generated files
+**/Platforms/Android/Resource.designer.cs
+**/Platforms/iOS/BundleStructure/
+
+# Log files (contain potential sensitive data)
+**/logs/
+*.log
+
+# User-specific settings
+*.suo
+*.userprefs
