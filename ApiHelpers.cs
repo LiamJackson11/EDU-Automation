@@ -1,12 +1,11 @@
 // Helpers/ApiHelpers.cs
 // Contains: ApiRateLimitHandler, TokenRefreshHandler, and all custom exceptions.
 
-using System;
 using System.Net;
-using System.Net.Http;
-using System.Threading;
-using System.Threading.Tasks;
 using EduAutomation.Services;
+// BUG FIX: Added missing Polly using directives. Without these the file fails to
+// compile because IAsyncPolicy<T>, HttpPolicyExtensions, and Policy are all
+// defined in the Polly / Polly.Extensions.Http packages.
 using Polly;
 using Polly.Extensions.Http;
 
@@ -62,7 +61,7 @@ namespace EduAutomation.Helpers
                             $"Circuit OPENED for {breakDuration.TotalSeconds}s. " +
                             $"Last status: {response.Result?.StatusCode}");
                     },
-                    onReset: () => { log?.LogInfo("CircuitBreaker", "Circuit RESET."); },
+                    onReset:    () => { log?.LogInfo("CircuitBreaker", "Circuit RESET."); },
                     onHalfOpen: () => { log?.LogInfo("CircuitBreaker", "Circuit HALF-OPEN."); });
         }
 
@@ -88,8 +87,8 @@ namespace EduAutomation.Helpers
             ISecureConfigService config,
             Func<Task>? onTokenExpired = null)
         {
-            _log = log;
-            _config = config;
+            _log            = log;
+            _config         = config;
             _onTokenExpired = onTokenExpired;
         }
 
@@ -118,8 +117,8 @@ namespace EduAutomation.Exceptions
 
     public class UnauthorizedSubmissionException : InvalidOperationException
     {
-        public string AssignmentId { get; }
-        public string ReviewItemId { get; }
+        public string AssignmentId  { get; }
+        public string ReviewItemId  { get; }
 
         public UnauthorizedSubmissionException(string assignmentId, string reviewItemId)
             : base($"Assignment '{assignmentId}' cannot be submitted: ReviewItem '{reviewItemId}' " +

@@ -1,21 +1,14 @@
 // MauiProgram.cs
-// Application entry point. Configures the .NET MAUI app builder,
-// registers all services with the dependency injection container,
-// and sets up HttpClient policies via IHttpClientFactory.
+// DI container, HttpClient factory with CookieContainer handlers,
+// and all service/viewmodel registrations.
 
-using System;
-using System.Net.Http;
-using EduAutomation.Helpers;
+using System.Net;
 using EduAutomation.Services;
 using EduAutomation.ViewModels;
 using EduAutomation.Views;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Maui.Controls.Hosting;
-using Microsoft.Maui.Hosting;
-using Polly;
 using Serilog;
-using Serilog.Extensions.Logging;
 
 namespace EduAutomation
 {
@@ -29,113 +22,121 @@ namespace EduAutomation
                 .UseMauiApp<App>()
                 .ConfigureFonts(fonts =>
                 {
-                    fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
-                    fonts.AddFont("OpenSans-Semibold.ttf", "OpenSansSemibold");
+                    fonts.AddFont("OpenSans-Regular.ttf",   "OpenSansRegular");
+                    fonts.AddFont("OpenSans-Semibold.ttf",  "OpenSansSemibold");
                 });
 
-            // ---- Configure Serilog as the logging provider ----
-            var serilogLogger = new LoggerConfiguration()
+            // ---- Serilog ----
+            var serilog = new LoggerConfiguration()
                 .MinimumLevel.Debug()
                 .WriteTo.Debug()
                 .CreateLogger();
 
-            builder.Logging
-                .ClearProviders()
-                .AddSerilog(serilogLogger);
+            builder.Logging.ClearProviders().AddSerilog(serilog);
 
-            // ---- Register Core Services as Singletons ----
-            builder.Services.AddSingleton<ILoggingService, LoggingService>();
+            // ---- Core singleton services ----
+            builder.Services.AddSingleton<ILoggingService,      LoggingService>();
             builder.Services.AddSingleton<ISecureConfigService, SecureConfigService>();
 
-            // ---- Register Named HttpClients with Polly resilience policies ----
-            // Each external API gets its own named HttpClient with retry + circuit breaker.
-
-            // Canvas HttpClient
-            builder.Services.AddHttpClient("Canvas", client =>
-            {
-                client.Timeout = TimeSpan.FromSeconds(30);
-                client.DefaultRequestHeaders.Add("Accept", "application/json");
-            })
-            .AddPolicyHandler((services, request) =>
-            {
-                var log = services.GetRequiredService<ILoggingService>();
-                return ApiRateLimitHandler.GetCombinedPolicy(log);
-            });
-
-            // OpenAI HttpClient
-            builder.Services.AddHttpClient("OpenAI", client =>
-            {
-                client.BaseAddress = new Uri("https://api.openai.com/");
-                client.Timeout = TimeSpan.FromSeconds(90);
-                client.DefaultRequestHeaders.Add("Accept", "application/json");
-            })
-            .AddPolicyHandler((services, request) =>
-            {
-                var log = services.GetRequiredService<ILoggingService>();
-                return ApiRateLimitHandler.GetCombinedPolicy(log);
-            });
-
-            // Infinite Campus HttpClient (with cookie handling for scraping)
-            builder.Services.AddHttpClient("InfiniteCampus", client =>
-            {
-                client.Timeout = TimeSpan.FromSeconds(30);
-                client.DefaultRequestHeaders.Add("User-Agent",
-                    "Mozilla/5.0 (compatible; EduAutomation/1.0)");
-            });
-
-            // Generic HttpClient for Data Dump URL fetching
-            builder.Services.AddHttpClient("DataDump", client =>
-            {
-                client.Timeout = TimeSpan.FromSeconds(15);
-            });
-
-            // ---- Register API Services ----
-            builder.Services.AddSingleton<IGmailService, GmailService>();
+            // ---- HttpClients ----
+            // Each scraping client owns its own CookieContainer so sessions are
+            // completely isolated. AllowAutoRedirect=true ensures login redirects
+            // are followed transparently.
 
             builder.Services.AddSingleton<ICanvasService>(sp =>
             {
-                var factory = sp.GetRequiredService<IHttpClientFactory>();
+                var cookies = new CookieContainer();
+                var handler = new HttpClientHandler
+                {
+                    CookieContainer         = cookies,
+                    AllowAutoRedirect       = true,
+                    MaxAutomaticRedirections = 10,
+                    UseCookies              = true,
+                };
+                var http = new HttpClient(handler)
+                {
+                    Timeout = TimeSpan.FromSeconds(30)
+                };
+                http.DefaultRequestHeaders.Add("User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/124.0 Safari/537.36");
+                http.DefaultRequestHeaders.Add("Accept",
+                    "text/html,application/xhtml+xml,application/json,*/*");
+
                 return new CanvasService(
-                    factory.CreateClient("Canvas"),
+                    http,
                     sp.GetRequiredService<ILoggingService>(),
                     sp.GetRequiredService<ISecureConfigService>());
             });
 
             builder.Services.AddSingleton<IInfiniteCampusService>(sp =>
             {
-                var factory = sp.GetRequiredService<IHttpClientFactory>();
+                var cookies = new CookieContainer();
+                var handler = new HttpClientHandler
+                {
+                    CookieContainer         = cookies,
+                    AllowAutoRedirect       = true,
+                    MaxAutomaticRedirections = 10,
+                    UseCookies              = true,
+                };
+                var http = new HttpClient(handler)
+                {
+                    Timeout = TimeSpan.FromSeconds(30)
+                };
+                http.DefaultRequestHeaders.Add("User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Chrome/124.0 Safari/537.36");
+
                 return new InfiniteCampusService(
-                    factory.CreateClient("InfiniteCampus"),
+                    http,
                     sp.GetRequiredService<ILoggingService>(),
                     sp.GetRequiredService<ISecureConfigService>());
             });
 
+            builder.Services.AddSingleton<IGmailService, GmailService>();
+
+            // OpenAI uses a plain HttpClient (no cookies needed, API key in header).
             builder.Services.AddSingleton<IOpenAIService>(sp =>
             {
-                var factory = sp.GetRequiredService<IHttpClientFactory>();
+                var http = new HttpClient
+                {
+                    BaseAddress = new Uri("https://api.openai.com/"),
+                    Timeout     = TimeSpan.FromSeconds(90)
+                };
+                http.DefaultRequestHeaders.Add("Accept", "application/json");
                 return new OpenAIService(
-                    factory.CreateClient("OpenAI"),
+                    http,
                     sp.GetRequiredService<ILoggingService>(),
                     sp.GetRequiredService<ISecureConfigService>());
             });
 
-            // ---- Register ViewModels as Transients ----
+            // Generic client for Data Dump URL fetching.
+            builder.Services.AddSingleton<System.Net.Http.HttpClient>(sp =>
+                new HttpClient { Timeout = TimeSpan.FromSeconds(15) });
+
+            // ---- ViewModels ----
+
             builder.Services.AddTransient<DashboardViewModel>();
             builder.Services.AddTransient<GmailViewModel>();
             builder.Services.AddTransient<AssignmentsViewModel>();
             builder.Services.AddTransient<DataDumpViewModel>(sp =>
-            {
-                var factory = sp.GetRequiredService<IHttpClientFactory>();
-                return new DataDumpViewModel(
+                new DataDumpViewModel(
                     sp.GetRequiredService<ICanvasService>(),
                     sp.GetRequiredService<IOpenAIService>(),
-                    factory.CreateClient("DataDump"),
-                    sp.GetRequiredService<ILoggingService>());
-            });
-            builder.Services.AddTransient<ReviewViewModel>();
+                    sp.GetRequiredService<System.Net.Http.HttpClient>(),
+                    sp.GetRequiredService<ILoggingService>()));
             builder.Services.AddTransient<SettingsViewModel>();
 
-            // ---- Register Pages ----
+            // BUG FIX: ReviewViewModel MUST be a singleton.
+            // Previously it was AddTransient, which meant AssignmentsPage,
+            // DataDumpPage, and ReviewPage each received a *different* instance.
+            // Items added by Assignments/DataDump were added to an orphaned VM
+            // that ReviewPage never saw, so the Review tab was always empty.
+            builder.Services.AddSingleton<ReviewViewModel>();
+
+            // ---- Pages ----
             builder.Services.AddTransient<DashboardPage>();
             builder.Services.AddTransient<GmailPage>();
             builder.Services.AddTransient<AssignmentsPage>();

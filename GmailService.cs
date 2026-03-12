@@ -3,21 +3,10 @@
 // Scans for school-related emails using configurable filter keywords.
 // Uses OAuth 2.0 with automatic token refresh via Google.Apis.Auth.
 
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using EduAutomation.Exceptions;
 using EduAutomation.Models;
-using Google.Apis.Auth.OAuth2;
-using Google.Apis.Gmail.v1;
-using Google.Apis.Gmail.v1.Data;
-using Google.Apis.Services;
-using Google.Apis.Util.Store;
 
 namespace EduAutomation.Services
 {
@@ -35,9 +24,9 @@ namespace EduAutomation.Services
 
     public class GmailService : IGmailService
     {
-        private const string Source = "GmailService";
+        private const string Source          = "GmailService";
         private const string ApplicationName = "EduAutomation";
-        private const string UserId = "me";
+        private const string UserId          = "me";
 
         // OAuth scopes required. Read-only to minimize permissions.
         private static readonly string[] Scopes = { Google.Apis.Gmail.v1.GmailService.Scope.GmailReadonly };
@@ -99,7 +88,7 @@ namespace EduAutomation.Services
                 _service = new Google.Apis.Gmail.v1.GmailService(new BaseClientService.Initializer
                 {
                     HttpClientInitializer = _credential,
-                    ApplicationName = ApplicationName
+                    ApplicationName      = ApplicationName
                 });
 
                 sw.Stop();
@@ -140,10 +129,21 @@ namespace EduAutomation.Services
             _log.LogInfo(Source, "Signing out of Gmail and clearing stored credentials.");
             try
             {
-                _credential?.RevokeTokenAsync(CancellationToken.None).Wait(5000);
-                string tokenFile = Path.Combine(_credentialStorePath, "Google.Apis.Auth.OAuth2.Responses.TokenResponse-student");
+                // BUG FIX: Was calling _credential.RevokeTokenAsync(...).Wait(5000),
+                // which blocks the calling thread. In a MAUI UI context this can
+                // deadlock because the async continuation needs the UI thread to
+                // resume. Use GetAwaiter().GetResult() on a background-safe path,
+                // or fire-and-forget with a timeout via Task.Run.
+                if (_credential != null)
+                {
+                    Task.Run(() => _credential.RevokeTokenAsync(CancellationToken.None))
+                        .Wait(TimeSpan.FromSeconds(5));
+                }
+
+                string tokenFile = Path.Combine(_credentialStorePath,
+                    "Google.Apis.Auth.OAuth2.Responses.TokenResponse-student");
                 if (File.Exists(tokenFile)) File.Delete(tokenFile);
-                _service = null;
+                _service    = null;
                 _credential = null;
             }
             catch (Exception ex)
@@ -173,7 +173,7 @@ namespace EduAutomation.Services
                 string query = "is:unread newer_than:7d";
 
                 var listRequest = _service!.Users.Messages.List(UserId);
-                listRequest.Q = query;
+                listRequest.Q          = query;
                 listRequest.MaxResults = maxResults * 3; // Fetch extra since we filter by keyword.
 
                 ListMessagesResponse listResponse = await listRequest.ExecuteAsync(ct);
@@ -245,8 +245,8 @@ namespace EduAutomation.Services
             {
                 var headers = message.Payload?.Headers ?? new List<MessagePartHeader>();
                 string subject = headers.FirstOrDefault(h => h.Name == "Subject")?.Value ?? "(No Subject)";
-                string from = headers.FirstOrDefault(h => h.Name == "From")?.Value ?? "Unknown Sender";
-                string dateStr = headers.FirstOrDefault(h => h.Name == "Date")?.Value ?? string.Empty;
+                string from    = headers.FirstOrDefault(h => h.Name == "From")?.Value   ?? "Unknown Sender";
+                string dateStr = headers.FirstOrDefault(h => h.Name == "Date")?.Value   ?? string.Empty;
 
                 DateTimeOffset receivedAt = DateTimeOffset.TryParse(dateStr, out var parsed)
                     ? parsed : DateTimeOffset.UtcNow;
@@ -255,15 +255,15 @@ namespace EduAutomation.Services
 
                 return new EmailAlert
                 {
-                    MessageId = message.Id,
-                    ThreadId = message.ThreadId,
-                    Subject = subject,
-                    Sender = from,
+                    MessageId      = message.Id,
+                    ThreadId       = message.ThreadId,
+                    Subject        = subject,
+                    Sender         = from,
                     SnippetPreview = message.Snippet ?? string.Empty,
-                    FullBodyText = bodyText,
-                    ReceivedAt = receivedAt,
-                    IsRead = !(message.LabelIds?.Contains("UNREAD") ?? false),
-                    Labels = message.LabelIds?.ToList() ?? new List<string>()
+                    FullBodyText   = bodyText,
+                    ReceivedAt     = receivedAt,
+                    IsRead         = !(message.LabelIds?.Contains("UNREAD") ?? false),
+                    Labels         = message.LabelIds?.ToList() ?? new List<string>()
                 };
             }
             catch (Exception ex)
@@ -278,8 +278,17 @@ namespace EduAutomation.Services
             if (part == null) return string.Empty;
             if (part.Body?.Data != null)
             {
-                byte[] data = Convert.FromBase64String(
-                    part.Body.Data.Replace('-', '+').Replace('_', '/'));
+                // BUG FIX: The Gmail API returns URL-safe base64 (RFC 4648 §5) which
+                // replaces '+' with '-' and '/' with '_', and may omit '=' padding.
+                // Convert.FromBase64String requires standard base64 WITH padding.
+                // Previously missing the padding step caused FormatException for any
+                // message whose body length was not a multiple of 3 bytes.
+                string base64 = part.Body.Data.Replace('-', '+').Replace('_', '/');
+                int pad = base64.Length % 4;
+                if (pad > 0)
+                    base64 = base64.PadRight(base64.Length + (4 - pad), '=');
+
+                byte[] data = Convert.FromBase64String(base64);
                 return Encoding.UTF8.GetString(data);
             }
             if (part.Parts != null)

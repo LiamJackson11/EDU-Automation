@@ -3,8 +3,6 @@
 // SECURITY NOTE: An assignment cannot be submitted unless IsApprovedByUser is true.
 // This is enforced in the CanvasService.SubmitAssignmentAsync guard clause.
 
-using System;
-
 namespace EduAutomation.Models
 {
     public enum ReviewItemStatus

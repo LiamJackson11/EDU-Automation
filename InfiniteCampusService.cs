@@ -1,20 +1,29 @@
 // Services/IInfiniteCampusService.cs + InfiniteCampusService.cs
-// Handles Infinite Campus integration.
-// Attempts REST API first; falls back to authenticated HTML scraping
-// via HtmlAgilityPack if the district does not expose a REST API.
+//
+// Full web-scraping implementation for Infinite Campus.
+// No API keys or tokens required -- only your school login credentials.
+//
+// Authentication flow:
+//   1. GET the login page to locate the form action URL and any hidden inputs.
+//   2. POST credentials to the form action (usually /campus/verify.do).
+//   3. Session cookie maintained in CookieContainer for all subsequent requests.
+//
+// Data scraping:
+//   - Grades / missing assignments: scrapes /campus/portal/student/grades.xsl
+//     and /campus/portal/student/todo.jsp
+//   - Falls back to the main dashboard feed JSON endpoint if the school
+//     district has it enabled (/campus/api/portal/grades).
+//   - Parses the assignment table rows looking for cells that contain the
+//     text "M" (missing) or have class="missing" in Infinite Campus themes.
+//
+// Session management:
+//   - IC sessions expire after ~30 minutes; re-auth fires at 25 minutes.
 
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Net;
-using System.Net.Http;
-using System.Threading;
-using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 using EduAutomation.Exceptions;
 using EduAutomation.Models;
-using HtmlAgilityPack;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace EduAutomation.Services
@@ -23,9 +32,9 @@ namespace EduAutomation.Services
 
     public interface IInfiniteCampusService
     {
-        Task<bool> AuthenticateAsync(CancellationToken ct = default);
-        Task<List<Assignment>> GetMissingAssignmentsAsync(CancellationToken ct = default);
+        Task<bool> LoginAsync(CancellationToken ct = default);
         Task<bool> IsSessionValidAsync();
+        Task<List<Assignment>> GetMissingAssignmentsAsync(CancellationToken ct = default);
         Task SignOutAsync();
     }
 
@@ -33,338 +42,578 @@ namespace EduAutomation.Services
 
     public class InfiniteCampusService : IInfiniteCampusService
     {
-        private const string Source = "InfiniteCampusService";
-        private const int SessionLifetimeMinutes = 25;
+        private const string Source             = "InfiniteCampusService";
+        private const int    SessionLifetimeMin = 25;
 
-        private readonly HttpClient _httpClient;
-        private readonly ILoggingService _log;
+        private readonly HttpClient           _http;
+        private readonly ILoggingService      _log;
         private readonly ISecureConfigService _config;
-        private readonly CookieContainer _cookieContainer;
 
-        private bool _isAuthenticated = false;
-        private DateTimeOffset _sessionCreatedAt = DateTimeOffset.MinValue;
+        private bool           _isLoggedIn     = false;
+        private DateTimeOffset _sessionCreated = DateTimeOffset.MinValue;
+        private string         _baseUrl        = string.Empty;
 
         public InfiniteCampusService(
-            HttpClient httpClient,
-            ILoggingService log,
-            ISecureConfigService config)
+            HttpClient http, ILoggingService log, ISecureConfigService config)
         {
-            _httpClient = httpClient;
-            _log = log;
+            _http   = http;
+            _log    = log;
             _config = config;
-            _cookieContainer = new CookieContainer();
         }
+
+        // ---- Session guard ----
 
         public async Task<bool> IsSessionValidAsync()
         {
-            if (!_isAuthenticated) return false;
-
-            TimeSpan sessionAge = DateTimeOffset.UtcNow - _sessionCreatedAt;
-            if (sessionAge.TotalMinutes >= SessionLifetimeMinutes)
+            if (!_isLoggedIn) return false;
+            double ageMin = (DateTimeOffset.UtcNow - _sessionCreated).TotalMinutes;
+            if (ageMin >= SessionLifetimeMin)
             {
                 _log.LogInfo(Source,
-                    $"IC session is {sessionAge.TotalMinutes:F0} minutes old. Re-authenticating...");
-                return await AuthenticateAsync();
+                    $"IC session is {ageMin:F0} min old (limit {SessionLifetimeMin}). Re-authenticating.");
+                return await LoginAsync();
             }
             return true;
         }
 
-        public async Task<bool> AuthenticateAsync(CancellationToken ct = default)
+        // ---- Step 1: Discover the login form ----
+        // Different districts host IC at different paths and some customise the
+        // form. We GET the root login URL and inspect the HTML to find the
+        // correct form action and any hidden/required inputs.
+
+        private async Task<(string formAction, Dictionary<string, string> hiddenFields)>
+            DiscoverLoginFormAsync(string loginUrl, CancellationToken ct)
         {
-            _log.LogInfo(Source, "Authenticating with Infinite Campus...");
-            var sw = Stopwatch.StartNew();
-
-            string? baseUrl = await _config.GetInfiniteCampusBaseUrlAsync();
-            string? username = await _config.GetInfiniteCampusUsernameAsync();
-            string? password = await _config.GetInfiniteCampusPasswordAsync();
-
-            if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(username))
-            {
-                _log.LogError(Source, "Infinite Campus credentials are not configured.");
-                return false;
-            }
+            _log.LogInfo(Source, $"Discovering IC login form at: {loginUrl}");
+            var hiddenFields = new Dictionary<string, string>();
+            string formAction = loginUrl; // fallback
 
             try
             {
-                // Attempt REST API authentication first.
-                bool restSuccess = await TryRestAuthAsync(baseUrl, username, password!, ct);
-                if (restSuccess)
+                HttpResponseMessage resp = await _http.GetAsync(loginUrl, ct);
+                resp.EnsureSuccessStatusCode();
+                string html = await resp.Content.ReadAsStringAsync(ct);
+
+                var doc = new HtmlDocument();
+                doc.LoadHtml(html);
+
+                // Find the first <form> that contains a password input.
+                HtmlNode? loginForm = doc.DocumentNode
+                    .SelectNodes("//form")
+                    ?.FirstOrDefault(f =>
+                        f.SelectSingleNode(".//input[@type='password']") != null);
+
+                if (loginForm != null)
                 {
-                    _isAuthenticated = true;
-                    _sessionCreatedAt = DateTimeOffset.UtcNow;
-                    sw.Stop();
-                    _log.LogInfo(Source, $"IC REST auth successful in {sw.ElapsedMilliseconds}ms.");
-                    return true;
+                    string action = loginForm.GetAttributeValue("action", "");
+                    if (!string.IsNullOrWhiteSpace(action))
+                    {
+                        formAction = action.StartsWith("http")
+                            ? action
+                            : _baseUrl + action;
+                    }
+
+                    // Collect all hidden inputs (state tokens, app names, etc.).
+                    foreach (HtmlNode input in loginForm
+                        .SelectNodes(".//input[@type='hidden']") ?? Enumerable.Empty<HtmlNode>())
+                    {
+                        string name  = input.GetAttributeValue("name",  "");
+                        string value = WebUtility.HtmlDecode(
+                            input.GetAttributeValue("value", ""));
+                        if (!string.IsNullOrWhiteSpace(name))
+                            hiddenFields[name] = value;
+                    }
                 }
 
-                // Fallback to form-based login via scraping.
-                _log.LogInfo(Source, "REST auth unavailable. Attempting form-based login...");
-                bool formSuccess = await TryFormLoginAsync(baseUrl, username, password!, ct);
-                if (formSuccess)
-                {
-                    _isAuthenticated = true;
-                    _sessionCreatedAt = DateTimeOffset.UtcNow;
-                    sw.Stop();
-                    _log.LogInfo(Source, $"IC form login successful in {sw.ElapsedMilliseconds}ms.");
-                    return true;
-                }
+                _log.LogInfo(Source,
+                    $"IC login form action: {formAction}. " +
+                    $"Hidden fields found: {hiddenFields.Count}");
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(Source, "Could not discover IC login form. Using default path.", ex);
+            }
 
-                _log.LogError(Source, "Both REST and form-based login failed for Infinite Campus.");
+            return (formAction, hiddenFields);
+        }
+
+        // ---- Step 2: POST credentials ----
+
+        public async Task<bool> LoginAsync(CancellationToken ct = default)
+        {
+            string? baseUrl  = await _config.GetInfiniteCampusBaseUrlAsync();
+            string? username = await _config.GetInfiniteCampusUsernameAsync();
+            string? password = await _config.GetInfiniteCampusPasswordAsync();
+
+            if (string.IsNullOrWhiteSpace(baseUrl)
+             || string.IsNullOrWhiteSpace(username)
+             || string.IsNullOrWhiteSpace(password))
+            {
+                _log.LogError(Source,
+                    "Infinite Campus credentials are not configured. " +
+                    "Enter your IC district URL, username, and password in Settings.");
                 return false;
+            }
+
+            _baseUrl = baseUrl.TrimEnd('/');
+
+            // Try the two most common IC login page paths.
+            string[] loginPaths =
+            {
+                $"{_baseUrl}/campus/portal/students.jsp",
+                $"{_baseUrl}/campus/students/portal.jsp",
+                $"{_baseUrl}/campus/verify.do",
+                $"{_baseUrl}/campus"
+            };
+
+            foreach (string loginUrl in loginPaths)
+            {
+                bool success = await TryLoginAtUrlAsync(loginUrl, username, password, ct);
+                if (success)
+                {
+                    _isLoggedIn     = true;
+                    _sessionCreated = DateTimeOffset.UtcNow;
+                    _log.LogInfo(Source,
+                        $"IC login succeeded via {loginUrl} at {_sessionCreated:g}");
+                    return true;
+                }
+            }
+
+            _log.LogError(Source,
+                "All IC login URL paths failed. Verify your district URL in Settings. " +
+                "The URL should be the base of your school's IC portal (e.g. " +
+                "https://district.infinitecampus.com).");
+            return false;
+        }
+
+        private async Task<bool> TryLoginAtUrlAsync(
+            string loginUrl, string username, string password, CancellationToken ct)
+        {
+            _log.LogInfo(Source, $"Attempting IC login at: {loginUrl}");
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                var (formAction, hiddenFields) = await DiscoverLoginFormAsync(loginUrl, ct);
+
+                // Build the POST body. Start with discovered hidden fields, then add credentials.
+                var formData = new List<KeyValuePair<string, string>>();
+                foreach (var kv in hiddenFields)
+                    formData.Add(new(kv.Key, kv.Value));
+
+                // Add standard IC credential field names.
+                // IC uses 'username' and 'password' on most deployments.
+                formData.Add(new("username", username));
+                formData.Add(new("password", password));
+
+                // Some deployments also need 'appName' and 'url'.
+                if (!hiddenFields.ContainsKey("appName"))
+                    formData.Add(new("appName", "portal"));
+                if (!hiddenFields.ContainsKey("url"))
+                    formData.Add(new("url", "services/homePageFeed.jsp"));
+
+                var content = new FormUrlEncodedContent(formData);
+                HttpResponseMessage resp = await _http.PostAsync(formAction, content, ct);
+                sw.Stop();
+                _log.LogApiCall(Source, "POST", formAction,
+                    (int)resp.StatusCode, sw.ElapsedMilliseconds);
+
+                string body    = await resp.Content.ReadAsStringAsync(ct);
+                string finalUrl= resp.RequestMessage?.RequestUri?.ToString() ?? string.Empty;
+
+                // Failure signatures: redirected back to login, or error text present.
+                bool failed =
+                    finalUrl.Contains("verify.do") ||
+                    finalUrl.Contains("login") ||
+                    body.Contains("Invalid username", StringComparison.OrdinalIgnoreCase) ||
+                    body.Contains("Invalid password", StringComparison.OrdinalIgnoreCase) ||
+                    body.Contains("please try again", StringComparison.OrdinalIgnoreCase) ||
+                    body.Contains("Authentication failed", StringComparison.OrdinalIgnoreCase);
+
+                if (failed)
+                {
+                    _log.LogDebug(Source,
+                        $"IC login at {loginUrl} failed (redirected or error text found). " +
+                        $"Final URL: {finalUrl}");
+                    return false;
+                }
+
+                return true;
             }
             catch (Exception ex)
             {
                 sw.Stop();
-                _log.LogError(Source, "Exception during Infinite Campus authentication.", ex);
+                _log.LogDebug(Source, $"IC login attempt at {loginUrl} threw: {ex.Message}");
                 return false;
             }
-        }
-
-        public async Task<List<Assignment>> GetMissingAssignmentsAsync(CancellationToken ct = default)
-        {
-            _log.LogInfo(Source, "Fetching missing assignments from Infinite Campus...");
-
-            if (!await IsSessionValidAsync())
-            {
-                bool reauthed = await AuthenticateAsync(ct);
-                if (!reauthed)
-                {
-                    throw new ServiceUnavailableException("InfiniteCampus",
-                        "Cannot fetch missing assignments: Infinite Campus authentication failed.");
-                }
-            }
-
-            string? baseUrl = await _config.GetInfiniteCampusBaseUrlAsync();
-            if (string.IsNullOrWhiteSpace(baseUrl)) return new List<Assignment>();
-
-            // Try REST API first.
-            var restResult = await TryGetMissingAssignmentsRestAsync(baseUrl, ct);
-            if (restResult != null)
-            {
-                _log.LogInfo(Source, $"IC REST: found {restResult.Count} missing assignments.");
-                return restResult;
-            }
-
-            // Fallback to scraping the gradebook page.
-            var scrapeResult = await ScrapeGradebookForMissingAsync(baseUrl, ct);
-            _log.LogInfo(Source, $"IC Scrape: found {scrapeResult.Count} missing assignments.");
-            return scrapeResult;
         }
 
         public async Task SignOutAsync()
         {
             _log.LogInfo(Source, "Signing out of Infinite Campus.");
-            string? baseUrl = await _config.GetInfiniteCampusBaseUrlAsync();
-            if (!string.IsNullOrWhiteSpace(baseUrl))
+            try { await _http.GetAsync($"{_baseUrl}/campus/logoff.jsp"); }
+            catch (Exception ex)
+            {
+                _log.LogError(Source, "IC sign-out error (non-critical).", ex);
+            }
+            _isLoggedIn     = false;
+            _sessionCreated = DateTimeOffset.MinValue;
+        }
+
+        // ---- Get missing assignments ----
+        // Tries three approaches in order of reliability.
+
+        public async Task<List<Assignment>> GetMissingAssignmentsAsync(CancellationToken ct = default)
+        {
+            _log.LogInfo(Source, "Fetching missing assignments from Infinite Campus...");
+            if (!await EnsureSessionAsync(ct))
+                throw new ServiceUnavailableException("InfiniteCampus",
+                    "Cannot fetch missing assignments: IC authentication failed. " +
+                    "Check your credentials in Settings.");
+
+            // Approach 1: district REST API (enabled by some schools).
+            var apiResult = await TryGetMissingViaApiAsync(ct);
+            if (apiResult != null)
+            {
+                _log.LogInfo(Source, $"IC REST API returned {apiResult.Count} missing items.");
+                return apiResult;
+            }
+
+            // Approach 2: scrape the To-Do / planner page.
+            var todoResult = await ScrapeToDoPageAsync(ct);
+            if (todoResult.Count > 0)
+            {
+                _log.LogInfo(Source, $"IC To-Do page returned {todoResult.Count} missing items.");
+                return todoResult;
+            }
+
+            // Approach 3: scrape the gradebook page for missing score flags.
+            var gradebookResult = await ScrapeGradebookAsync(ct);
+            _log.LogInfo(Source,
+                $"IC Gradebook scrape returned {gradebookResult.Count} missing items.");
+            return gradebookResult;
+        }
+
+        // ---- Approach 1: district REST API ----
+
+        private async Task<List<Assignment>?> TryGetMissingViaApiAsync(CancellationToken ct)
+        {
+            string[] candidateUrls =
+            {
+                $"{_baseUrl}/campus/api/portal/grades/missingassignments",
+                $"{_baseUrl}/campus/resources/portal/grades/missingassignments",
+            };
+
+            foreach (string url in candidateUrls)
             {
                 try
                 {
-                    await _httpClient.GetAsync($"{baseUrl}/campus/logoff.jsp",
-                        CancellationToken.None);
+                    var sw = Stopwatch.StartNew();
+                    HttpResponseMessage resp = await _http.GetAsync(url, ct);
+                    sw.Stop();
+                    _log.LogApiCall(Source, "GET", url, (int)resp.StatusCode, sw.ElapsedMilliseconds);
+
+                    if (!resp.IsSuccessStatusCode) continue;
+
+                    string json = await resp.Content.ReadAsStringAsync(ct);
+                    JToken parsed = JToken.Parse(json);
+                    JArray items = parsed is JArray arr ? arr
+                        : parsed["data"] as JArray ?? new JArray();
+
+                    var result = new List<Assignment>();
+                    foreach (JToken item in items)
+                    {
+                        result.Add(new Assignment
+                        {
+                            Id         = item["assignmentID"]?.ToString()
+                                       ?? item["id"]?.ToString()
+                                       ?? Guid.NewGuid().ToString(),
+                            Title      = item["assignmentName"]?.ToString()
+                                       ?? item["name"]?.ToString()
+                                       ?? "Unknown Assignment",
+                            CourseName = item["courseName"]?.ToString()
+                                       ?? item["course"]?.ToString()
+                                       ?? "Unknown Course",
+                            DueDate    = TryParseDate(item["dueDate"]?.ToString()
+                                       ?? item["due"]?.ToString()),
+                            PointsPossible = item["totalPoints"]?.Value<double?>()
+                                          ?? item["points"]?.Value<double?>(),
+                            Status = AssignmentStatus.Missing,
+                            Source = AssignmentSource.InfiniteCampus
+                        });
+                    }
+                    return result;
                 }
                 catch (Exception ex)
                 {
-                    _log.LogError(Source, "Error during IC sign-out (non-critical).", ex);
+                    _log.LogDebug(Source, $"IC API at {url} unavailable: {ex.Message}");
                 }
             }
-            _isAuthenticated = false;
-            _sessionCreatedAt = DateTimeOffset.MinValue;
+            return null;
         }
 
-        // Attempts Infinite Campus REST API authentication (district-dependent).
-        private async Task<bool> TryRestAuthAsync(
-            string baseUrl, string username, string password, CancellationToken ct)
-        {
-            try
-            {
-                string tokenUrl = $"{baseUrl}/campus/api/token";
-                var form = new FormUrlEncodedContent(new[]
-                {
-                    new KeyValuePair<string, string>("grant_type", "password"),
-                    new KeyValuePair<string, string>("username", username),
-                    new KeyValuePair<string, string>("password", password)
-                });
+        // ---- Approach 2: scrape the To-Do / planner page ----
 
-                var sw = Stopwatch.StartNew();
-                HttpResponseMessage response = await _httpClient.PostAsync(tokenUrl, form, ct);
-                sw.Stop();
-                _log.LogApiCall(Source, "POST", tokenUrl, (int)response.StatusCode, sw.ElapsedMilliseconds);
-
-                if (!response.IsSuccessStatusCode) return false;
-
-                string json = await response.Content.ReadAsStringAsync(ct);
-                var tokenObj = JObject.Parse(json);
-                string? token = tokenObj["access_token"]?.ToString();
-
-                if (!string.IsNullOrWhiteSpace(token))
-                {
-                    _httpClient.DefaultRequestHeaders.Authorization =
-                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-                    return true;
-                }
-                return false;
-            }
-            catch (Exception ex)
-            {
-                _log.LogDebug(Source, $"REST auth attempt failed (expected for many districts): {ex.Message}");
-                return false;
-            }
-        }
-
-        // Form-based login for districts without a REST API.
-        private async Task<bool> TryFormLoginAsync(
-            string baseUrl, string username, string password, CancellationToken ct)
-        {
-            try
-            {
-                string loginUrl = $"{baseUrl}/campus/verify.do";
-                var form = new FormUrlEncodedContent(new[]
-                {
-                    new KeyValuePair<string, string>("username", username),
-                    new KeyValuePair<string, string>("password", password),
-                    new KeyValuePair<string, string>("appName", "portal"),
-                    new KeyValuePair<string, string>("url", "services/homePageFeed.jsp")
-                });
-
-                var sw = Stopwatch.StartNew();
-                HttpResponseMessage response = await _httpClient.PostAsync(loginUrl, form, ct);
-                sw.Stop();
-                _log.LogApiCall(Source, "POST", loginUrl, (int)response.StatusCode, sw.ElapsedMilliseconds);
-
-                if (!response.IsSuccessStatusCode) return false;
-
-                string responseBody = await response.Content.ReadAsStringAsync(ct);
-
-                // A successful IC login will NOT contain the word "Invalid" and
-                // will redirect to the portal home.
-                bool isLoginPage = responseBody.Contains("verify.do")
-                    || responseBody.ToLower().Contains("invalid username");
-
-                return !isLoginPage;
-            }
-            catch (Exception ex)
-            {
-                _log.LogError(Source, "Form-based login attempt threw an exception.", ex);
-                return false;
-            }
-        }
-
-        // Tries to fetch missing assignments via the IC REST API.
-        private async Task<List<Assignment>?> TryGetMissingAssignmentsRestAsync(
-            string baseUrl, CancellationToken ct)
-        {
-            try
-            {
-                string url = $"{baseUrl}/campus/api/portal/grades/missingassignments";
-                var sw = Stopwatch.StartNew();
-                HttpResponseMessage response = await _httpClient.GetAsync(url, ct);
-                sw.Stop();
-                _log.LogApiCall(Source, "GET", url, (int)response.StatusCode, sw.ElapsedMilliseconds);
-
-                if (!response.IsSuccessStatusCode) return null;
-
-                string json = await response.Content.ReadAsStringAsync(ct);
-                var items = JArray.Parse(json);
-                var result = new List<Assignment>();
-
-                foreach (var item in items)
-                {
-                    result.Add(new Assignment
-                    {
-                        Id = item["assignmentID"]?.ToString() ?? Guid.NewGuid().ToString(),
-                        Title = item["assignmentName"]?.ToString() ?? "Unknown Assignment",
-                        CourseName = item["courseName"]?.ToString() ?? "Unknown Course",
-                        DueDate = item["dueDate"] != null
-                            ? DateTimeOffset.TryParse(item["dueDate"]!.ToString(), out var d) ? d : null
-                            : null,
-                        PointsPossible = item["totalPoints"]?.Value<double>(),
-                        Status = AssignmentStatus.Missing,
-                        Source = AssignmentSource.InfiniteCampus
-                    });
-                }
-                return result;
-            }
-            catch (Exception ex)
-            {
-                _log.LogDebug(Source, $"IC REST missing assignments unavailable: {ex.Message}");
-                return null;
-            }
-        }
-
-        // Scrapes the IC gradebook HTML page as a fallback.
-        private async Task<List<Assignment>> ScrapeGradebookForMissingAsync(
-            string baseUrl, CancellationToken ct)
+        private async Task<List<Assignment>> ScrapeToDoPageAsync(CancellationToken ct)
         {
             var result = new List<Assignment>();
-            try
+            string[] todoUrls =
             {
-                string url = $"{baseUrl}/campus/portal/student/gradebook.xsl";
-                var sw = Stopwatch.StartNew();
-                HttpResponseMessage response = await _httpClient.GetAsync(url, ct);
-                sw.Stop();
-                _log.LogApiCall(Source, "GET", url, (int)response.StatusCode, sw.ElapsedMilliseconds);
+                $"{_baseUrl}/campus/portal/student/todo.jsp",
+                $"{_baseUrl}/campus/portal/student/planner.jsp",
+                $"{_baseUrl}/campus/student/planner",
+            };
 
-                if (!response.IsSuccessStatusCode)
+            foreach (string url in todoUrls)
+            {
+                try
                 {
-                    _log.LogWarning(Source,
-                        $"Gradebook scrape returned HTTP {(int)response.StatusCode}.");
-                    return result;
-                }
+                    var sw = Stopwatch.StartNew();
+                    HttpResponseMessage resp = await _http.GetAsync(url, ct);
+                    sw.Stop();
+                    _log.LogApiCall(Source, "GET", url, (int)resp.StatusCode, sw.ElapsedMilliseconds);
 
-                string html = await response.Content.ReadAsStringAsync(ct);
-                var doc = new HtmlDocument();
-                doc.LoadHtml(html);
+                    if (!resp.IsSuccessStatusCode) continue;
 
-                // Look for assignment rows marked as missing.
-                // IC uses class="missing" or shows a "M" flag in the score column.
-                var missingRows = doc.DocumentNode
-                    .SelectNodes("//tr[contains(@class,'missing') or .//td[contains(@class,'missing')]]");
+                    string html = await resp.Content.ReadAsStringAsync(ct);
+                    var doc = new HtmlDocument();
+                    doc.LoadHtml(html);
 
-                if (missingRows == null)
-                {
-                    _log.LogInfo(Source, "No missing assignment rows found in gradebook HTML.");
-                    return result;
-                }
+                    // IC To-Do page typically renders a list of tasks with course name,
+                    // assignment name, and due date inside <li> or <tr> elements.
+                    var assignmentNodes = doc.DocumentNode
+                        .SelectNodes("//li[contains(@class,'task') or contains(@class,'assignment')]"
+                                   + " | //tr[contains(@class,'task') or contains(@class,'missing')]");
 
-                foreach (var row in missingRows)
-                {
-                    string assignmentName = row.SelectSingleNode(
-                        ".//td[contains(@class,'assignment')]")?.InnerText.Trim()
-                        ?? row.SelectSingleNode(".//td[1]")?.InnerText.Trim()
-                        ?? "Unknown Assignment";
+                    if (assignmentNodes == null || !assignmentNodes.Any()) continue;
 
-                    string courseName = row.SelectSingleNode(
-                        ".//td[contains(@class,'course')]")?.InnerText.Trim()
-                        ?? "Unknown Course";
-
-                    string dueDateStr = row.SelectSingleNode(
-                        ".//td[contains(@class,'due')]")?.InnerText.Trim()
-                        ?? string.Empty;
-
-                    DateTimeOffset.TryParse(dueDateStr, out DateTimeOffset dueDate);
-
-                    result.Add(new Assignment
+                    foreach (HtmlNode node in assignmentNodes)
                     {
-                        Id = Guid.NewGuid().ToString(),
-                        Title = assignmentName,
-                        CourseName = courseName,
-                        DueDate = dueDateStr != string.Empty ? dueDate : null,
-                        Status = AssignmentStatus.Missing,
-                        Source = AssignmentSource.InfiniteCampus
-                    });
-                }
+                        string title = (
+                            node.SelectSingleNode(".//*[contains(@class,'title')]")
+                            ?? node.SelectSingleNode(".//*[contains(@class,'name')]")
+                            ?? node.SelectSingleNode(".//a")
+                            ?? node)?.InnerText.Trim() ?? string.Empty;
 
-                _log.LogInfo(Source,
-                    $"Scraping found {result.Count} missing assignments in gradebook.");
+                        string course = (
+                            node.SelectSingleNode(".//*[contains(@class,'course')]")
+                            ?? node.SelectSingleNode(".//*[contains(@class,'class')]"))
+                            ?.InnerText.Trim() ?? "Unknown Course";
+
+                        string dueTxt = (
+                            node.SelectSingleNode(".//*[contains(@class,'due')]")
+                            ?? node.SelectSingleNode(".//*[contains(@class,'date')]"))
+                            ?.InnerText.Trim() ?? string.Empty;
+
+                        if (string.IsNullOrWhiteSpace(title)) continue;
+
+                        result.Add(new Assignment
+                        {
+                            Id         = Guid.NewGuid().ToString(),
+                            Title      = title,
+                            CourseName = course,
+                            DueDate    = TryParseDate(dueTxt),
+                            Status     = AssignmentStatus.Missing,
+                            Source     = AssignmentSource.InfiniteCampus
+                        });
+                    }
+
+                    if (result.Count > 0)
+                    {
+                        _log.LogInfo(Source,
+                            $"Scraped {result.Count} items from IC To-Do page: {url}");
+                        return result;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log.LogDebug(Source, $"IC To-Do scrape at {url} failed: {ex.Message}");
+                }
+            }
+            return result;
+        }
+
+        // ---- Approach 3: scrape the gradebook ----
+
+        private async Task<List<Assignment>> ScrapeGradebookAsync(CancellationToken ct)
+        {
+            var result = new List<Assignment>();
+            string[] gradebookUrls =
+            {
+                $"{_baseUrl}/campus/portal/student/grades.xsl",
+                $"{_baseUrl}/campus/student/grades",
+                $"{_baseUrl}/campus/grades/student",
+            };
+
+            foreach (string url in gradebookUrls)
+            {
+                try
+                {
+                    var sw = Stopwatch.StartNew();
+                    HttpResponseMessage resp = await _http.GetAsync(url, ct);
+                    sw.Stop();
+                    _log.LogApiCall(Source, "GET", url, (int)resp.StatusCode, sw.ElapsedMilliseconds);
+
+                    if (!resp.IsSuccessStatusCode) continue;
+
+                    string html = await resp.Content.ReadAsStringAsync(ct);
+                    var doc = new HtmlDocument();
+                    doc.LoadHtml(html);
+
+                    result.AddRange(ParseGradebookHtml(doc, url));
+                    if (result.Count > 0)
+                    {
+                        _log.LogInfo(Source,
+                            $"Gradebook scrape found {result.Count} missing assignments at {url}");
+                        return result;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log.LogDebug(Source, $"Gradebook scrape at {url} failed: {ex.Message}");
+                }
+            }
+
+            if (result.Count == 0)
+                _log.LogWarning(Source,
+                    "All IC scraping approaches returned 0 results. " +
+                    "Verify your district URL is correct in Settings. " +
+                    "The IC portal structure may differ slightly from the expected layout.");
+
+            return result;
+        }
+
+        private List<Assignment> ParseGradebookHtml(HtmlDocument doc, string sourceUrl)
+        {
+            var result = new List<Assignment>();
+
+            // Strategy A: rows with class="missing" or a cell containing "M" score flag.
+            var missingRows = doc.DocumentNode.SelectNodes(
+                "//tr[contains(@class,'missing')" +
+                " or .//td[contains(@class,'missing')]" +
+                " or .//td[@title='Missing']" +
+                " or .//td[normalize-space(text())='M']]");
+
+            if (missingRows != null)
+            {
+                foreach (HtmlNode row in missingRows)
+                {
+                    string title = ExtractCellText(row,
+                        "td[contains(@class,'assignment')]",
+                        "td[contains(@class,'name')]",
+                        "td[1]");
+
+                    string course = ExtractCellText(row,
+                        "td[contains(@class,'course')]",
+                        "td[contains(@class,'class')]",
+                        "");
+
+                    string dueText = ExtractCellText(row,
+                        "td[contains(@class,'due')]",
+                        "td[contains(@class,'date')]",
+                        "");
+
+                    if (!string.IsNullOrWhiteSpace(title))
+                        result.Add(new Assignment
+                        {
+                            Id         = Guid.NewGuid().ToString(),
+                            Title      = title,
+                            CourseName = string.IsNullOrWhiteSpace(course)
+                                       ? "Unknown Course" : course,
+                            DueDate    = TryParseDate(dueText),
+                            Status     = AssignmentStatus.Missing,
+                            Source     = AssignmentSource.InfiniteCampus
+                        });
+                }
                 return result;
             }
-            catch (Exception ex)
+
+            // Strategy B: look for any table that has an "Assignment" header column
+            // and scan rows for empty or zero scores.
+            var tables = doc.DocumentNode.SelectNodes("//table");
+            if (tables == null) return result;
+
+            foreach (HtmlNode table in tables)
             {
-                _log.LogError(Source, "Error scraping Infinite Campus gradebook.", ex);
-                throw new ServiceUnavailableException("InfiniteCampus",
-                    "Failed to scrape gradebook from Infinite Campus. " +
-                    "The portal HTML structure may have changed.", ex);
+                var headers = table.SelectNodes(".//th");
+                if (headers == null) continue;
+
+                int assignmentCol = -1, courseCol = -1, dueCol = -1, scoreCol = -1;
+                for (int i = 0; i < headers.Count; i++)
+                {
+                    string h = headers[i].InnerText.Trim().ToLower();
+                    if (h.Contains("assignment") || h.Contains("task"))   assignmentCol = i;
+                    else if (h.Contains("course") || h.Contains("class")) courseCol = i;
+                    else if (h.Contains("due"))                            dueCol = i;
+                    else if (h.Contains("score") || h.Contains("grade"))  scoreCol = i;
+                }
+
+                if (assignmentCol < 0) continue;
+
+                foreach (HtmlNode row in table.SelectNodes(".//tr[td]") ?? Enumerable.Empty<HtmlNode>())
+                {
+                    var cells = row.SelectNodes("td");
+                    if (cells == null || cells.Count <= assignmentCol) continue;
+
+                    string scoreText = scoreCol >= 0 && scoreCol < cells.Count
+                        ? cells[scoreCol].InnerText.Trim() : "";
+
+                    // A row is "missing" if the score cell is empty, "M", "--", or "0/X".
+                    bool isMissing =
+                        string.IsNullOrWhiteSpace(scoreText) ||
+                        scoreText == "M" || scoreText == "--" ||
+                        Regex.IsMatch(scoreText, @"^0\s*/\s*\d+$");
+
+                    if (!isMissing) continue;
+
+                    string title  = cells[assignmentCol].InnerText.Trim();
+                    string course = courseCol >= 0 && courseCol < cells.Count
+                        ? cells[courseCol].InnerText.Trim() : "Unknown Course";
+                    string due    = dueCol >= 0 && dueCol < cells.Count
+                        ? cells[dueCol].InnerText.Trim() : "";
+
+                    if (!string.IsNullOrWhiteSpace(title))
+                        result.Add(new Assignment
+                        {
+                            Id         = Guid.NewGuid().ToString(),
+                            Title      = title,
+                            CourseName = course,
+                            DueDate    = TryParseDate(due),
+                            Status     = AssignmentStatus.Missing,
+                            Source     = AssignmentSource.InfiniteCampus
+                        });
+                }
             }
+
+            return result;
+        }
+
+        // ---- Helpers ----
+
+        private async Task<bool> EnsureSessionAsync(CancellationToken ct)
+        {
+            if (await IsSessionValidAsync()) return true;
+            return await LoginAsync(ct);
+        }
+
+        private static string ExtractCellText(HtmlNode row, params string[] xpaths)
+        {
+            foreach (string xpath in xpaths)
+            {
+                if (string.IsNullOrWhiteSpace(xpath)) continue;
+                HtmlNode? node = row.SelectSingleNode($".//{xpath}");
+                if (node != null)
+                {
+                    string text = node.InnerText.Trim();
+                    if (!string.IsNullOrWhiteSpace(text)) return text;
+                }
+            }
+            return string.Empty;
+        }
+
+        private static DateTimeOffset? TryParseDate(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            return DateTimeOffset.TryParse(raw, out DateTimeOffset result) ? result : null;
         }
     }
 }

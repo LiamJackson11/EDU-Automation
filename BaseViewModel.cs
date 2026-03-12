@@ -3,10 +3,7 @@
 // IsBusy state tracking, and unified error display.
 
 using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
 using EduAutomation.Services;
-using System;
-using System.Threading.Tasks;
 
 namespace EduAutomation.ViewModels
 {
@@ -36,23 +33,28 @@ namespace EduAutomation.ViewModels
 
         protected void SetBusy(bool isBusy, string message = "Loading...")
         {
-            IsBusy = isBusy;
+            IsBusy      = isBusy;
             BusyMessage = message;
-            if (!isBusy) ErrorMessage = string.Empty;
+
+            // BUG FIX: Removed "if (!isBusy) ErrorMessage = string.Empty;" from here.
+            // Previously this was clearing ErrorMessage every time SetBusy(false) was
+            // called — including from RunSafeAsync's finally block — which wiped out
+            // the error that ShowError had just set, so errors were never visible.
+            // ErrorMessage is now cleared explicitly only in ClearError().
         }
 
         protected void ShowError(string message)
         {
             ErrorMessage = message;
-            HasError = true;
-            IsBusy = false;
+            HasError     = true;
+            IsBusy       = false;
             Log.LogError(GetType().Name, $"UI Error shown to user: {message}");
         }
 
         protected void ClearError()
         {
             ErrorMessage = string.Empty;
-            HasError = false;
+            HasError     = false;
         }
 
         // Executes a task safely, showing errors to the user and logging exceptions.
@@ -91,7 +93,10 @@ namespace EduAutomation.ViewModels
             }
             finally
             {
-                SetBusy(false);
+                // BUG FIX: Only stop the spinner; do NOT call SetBusy(false) which
+                // previously cleared ErrorMessage. We set IsBusy directly so the
+                // error message set by ShowError is preserved for the UI to display.
+                IsBusy = false;
             }
         }
     }

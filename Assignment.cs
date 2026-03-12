@@ -1,8 +1,6 @@
 // Models/Assignment.cs
 // Represents a single assignment from Canvas LMS or Infinite Campus.
 
-using System;
-
 namespace EduAutomation.Models
 {
     public enum AssignmentStatus

@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- Views/SettingsPage.xaml -->
+<!-- Username/password login for Canvas and Infinite Campus. No API tokens. -->
+
+<ContentPage
+    x:Class="EduAutomation.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:vm="clr-namespace:EduAutomation.ViewModels"
+    Title="Settings">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20" Spacing="16">
+
+            <Label Text="Account Setup"
+                   FontSize="22" FontAttributes="Bold" />
+            <Label Text="Enter your school login credentials below. All data is stored securely on this device and never shared."
+                   FontSize="13" TextColor="Gray" />
+
+            <!-- ======================== Canvas ======================== -->
+            <Border StrokeShape="RoundRectangle 10" Padding="16"
+                    BackgroundColor="{AppThemeBinding Light=#f8f9fa, Dark=#1e1e2e}">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="Canvas LMS" FontSize="16" FontAttributes="Bold" />
+                    <Label Text="Your school's Canvas URL (example: https://myschool.instructure.com)"
+                           FontSize="12" TextColor="Gray" />
+
+                    <Entry Placeholder="Canvas URL  e.g. https://myschool.instructure.com"
+                           Text="{Binding CanvasBaseUrl}"
+                           Keyboard="Url" ClearButtonVisibility="WhileEditing" />
+
+                    <Entry Placeholder="Canvas Username (school login)"
+                           Text="{Binding CanvasUsername}"
+                           ClearButtonVisibility="WhileEditing" />
+
+                    <Entry Placeholder="Canvas Password"
+                           Text="{Binding CanvasPassword}"
+                           IsPassword="True" />
+
+                    <!-- Status indicator -->
+                    <HorizontalStackLayout Spacing="8">
+                        <Ellipse WidthRequest="10" HeightRequest="10"
+                                 Fill="{Binding IsCanvasValid,
+                                        Converter={StaticResource BoolToColorConverter}}" />
+                        <Label Text="{Binding IsCanvasValid,
+                               StringFormat='{0}'}"
+                               FontSize="12" TextColor="Gray" />
+                    </HorizontalStackLayout>
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- ======================== Infinite Campus ======================== -->
+            <Border StrokeShape="RoundRectangle 10" Padding="16"
+                    BackgroundColor="{AppThemeBinding Light=#f8f9fa, Dark=#1e1e2e}">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="Infinite Campus" FontSize="16" FontAttributes="Bold" />
+                    <Label Text="Your school's IC portal URL (example: https://mydistrict.infinitecampus.com)"
+                           FontSize="12" TextColor="Gray" />
+
+                    <Entry Placeholder="Infinite Campus URL"
+                           Text="{Binding IcBaseUrl}"
+                           Keyboard="Url" ClearButtonVisibility="WhileEditing" />
+
+                    <Entry Placeholder="IC Username"
+                           Text="{Binding IcUsername}"
+                           ClearButtonVisibility="WhileEditing" />
+
+                    <Entry Placeholder="IC Password"
+                           Text="{Binding IcPassword}"
+                           IsPassword="True" />
+
+                    <HorizontalStackLayout Spacing="8">
+                        <Ellipse WidthRequest="10" HeightRequest="10"
+                                 Fill="{Binding IsIcValid,
+                                        Converter={StaticResource BoolToColorConverter}}" />
+                        <Label Text="{Binding IsIcValid, StringFormat='{0}'}"
+                               FontSize="12" TextColor="Gray" />
+                    </HorizontalStackLayout>
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- ======================== OpenAI ======================== -->
+            <Border StrokeShape="RoundRectangle 10" Padding="16"
+                    BackgroundColor="{AppThemeBinding Light=#f8f9fa, Dark=#1e1e2e}">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="OpenAI (AI Assignment Helper)"
+                           FontSize="16" FontAttributes="Bold" />
+                    <Label Text="Get your key at platform.openai.com/api-keys"
+                           FontSize="12" TextColor="Gray" />
+
+                    <Entry Placeholder="sk-..."
+                           Text="{Binding OpenAiApiKey}"
+                           IsPassword="True" />
+
+                    <HorizontalStackLayout Spacing="8">
+                        <Ellipse WidthRequest="10" HeightRequest="10"
+                                 Fill="{Binding IsOpenAiValid,
+                                        Converter={StaticResource BoolToColorConverter}}" />
+                        <Label Text="{Binding IsOpenAiValid, StringFormat='{0}'}"
+                               FontSize="12" TextColor="Gray" />
+                    </HorizontalStackLayout>
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Validation status banner -->
+            <Border IsVisible="{Binding ValidationStatus,
+                               Converter={StaticResource NotNullConverter}}"
+                    BackgroundColor="#e8f5e9"
+                    StrokeShape="RoundRectangle 8" Padding="12">
+                <Label Text="{Binding ValidationStatus}"
+                       FontSize="13" TextColor="#1b5e20" />
+            </Border>
+
+            <!-- Save and Validate button -->
+            <Button Text="Save and Test Connections"
+                    Command="{Binding SaveAndValidateCommand}"
+                    IsEnabled="{Binding IsNotBusy}"
+                    BackgroundColor="#3f51b5" TextColor="White"
+                    CornerRadius="8" HeightRequest="50"
+                    FontSize="16" FontAttributes="Bold" />
+
+            <!-- Clear credentials -->
+            <Button Text="Clear All Credentials"
+                    Command="{Binding ClearAllDataCommand}"
+                    IsEnabled="{Binding IsNotBusy}"
+                    BackgroundColor="#ef5350" TextColor="White"
+                    CornerRadius="8" HeightRequest="44" />
+
+            <ActivityIndicator IsRunning="{Binding IsBusy}"
+                               IsVisible="{Binding IsBusy}"
+                               Color="#3f51b5" />
+
+            <Border IsVisible="{Binding HasError}"
+                    BackgroundColor="#ffebee"
+                    StrokeShape="RoundRectangle 8" Padding="12">
+                <Label Text="{Binding ErrorMessage}"
+                       TextColor="#c62828" FontSize="13" />
+            </Border>
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

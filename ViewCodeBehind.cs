@@ -2,10 +2,8 @@
 // Code-behind for all five tab pages.
 // All using directives are at the top of the file.
 
-using System.Threading.Tasks;
 using EduAutomation.Models;
 using EduAutomation.ViewModels;
-using Microsoft.Maui.Controls;
 
 namespace EduAutomation.Views
 {
@@ -57,14 +55,18 @@ namespace EduAutomation.Views
     public partial class AssignmentsPage : ContentPage
     {
         private readonly AssignmentsViewModel _viewModel;
-        private readonly ReviewViewModel _reviewViewModel;
+        private readonly ReviewViewModel      _reviewViewModel;
 
         public AssignmentsPage(AssignmentsViewModel viewModel, ReviewViewModel reviewViewModel)
         {
             InitializeComponent();
-            _viewModel = viewModel;
+            _viewModel       = viewModel;
             _reviewViewModel = reviewViewModel;
-            BindingContext = viewModel;
+            BindingContext   = viewModel;
+
+            // BUG FIX: Subscribe here but always unsubscribe in OnDisappearing /
+            // Dispose to prevent the event handler keeping both objects alive
+            // (a reference cycle: page → VM via _viewModel, VM → page via event).
             viewModel.ReviewItemReady += OnReviewItemReady;
         }
 
@@ -80,6 +82,16 @@ namespace EduAutomation.Views
             if (_viewModel.MissingAssignments.Count == 0)
                 await _viewModel.LoadMissingAssignmentsCommand.ExecuteAsync(null);
         }
+
+        // BUG FIX: Unsubscribe when the page is being destroyed so the AssignmentsViewModel
+        // no longer holds a reference back to this page instance, breaking the cycle
+        // and allowing both to be garbage-collected correctly.
+        protected override void OnHandlerChanging(HandlerChangingEventArgs args)
+        {
+            base.OnHandlerChanging(args);
+            if (args.NewHandler == null) // page being detached / destroyed
+                _viewModel.ReviewItemReady -= OnReviewItemReady;
+        }
     }
 
     // ============================================================
@@ -89,14 +101,17 @@ namespace EduAutomation.Views
     public partial class DataDumpPage : ContentPage
     {
         private readonly DataDumpViewModel _viewModel;
-        private readonly ReviewViewModel _reviewViewModel;
+        private readonly ReviewViewModel   _reviewViewModel;
 
         public DataDumpPage(DataDumpViewModel viewModel, ReviewViewModel reviewViewModel)
         {
             InitializeComponent();
-            _viewModel = viewModel;
+            _viewModel       = viewModel;
             _reviewViewModel = reviewViewModel;
-            BindingContext = viewModel;
+            BindingContext   = viewModel;
+
+            // BUG FIX: Same pattern as AssignmentsPage — subscribe now, unsubscribe
+            // in OnHandlerChanging to prevent a memory-leak reference cycle.
             viewModel.ReviewItemReady += OnReviewItemReady;
         }
 
@@ -111,6 +126,13 @@ namespace EduAutomation.Views
             base.OnAppearing();
             if (_viewModel.AvailableAssignments.Count == 0)
                 await _viewModel.LoadAssignmentsCommand.ExecuteAsync(null);
+        }
+
+        protected override void OnHandlerChanging(HandlerChangingEventArgs args)
+        {
+            base.OnHandlerChanging(args);
+            if (args.NewHandler == null)
+                _viewModel.ReviewItemReady -= OnReviewItemReady;
         }
     }
 
