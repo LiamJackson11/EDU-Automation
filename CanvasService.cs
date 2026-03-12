@@ -1,7 +1,7 @@
 // Services/CanvasService.cs
 // Web-scraping Canvas login + session-cookie authenticated API calls.
 // No API token required. Uses username + password only.
-
+using HtmlAgilityPack;
 using System.Diagnostics;
 using System.Net;
 using System.Text;

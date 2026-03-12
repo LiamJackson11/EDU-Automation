@@ -1,0 +1,8 @@
+Setup started: Wed 03/11/2026 21:53:49.90 
+Root: C:\VsCode\EduAutomation 
+.NET version: 9.0.304 
+
+Workload(s) 'maui' are already installed.
+
+Successfully installed workload(s) .
+

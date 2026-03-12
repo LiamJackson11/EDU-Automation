@@ -1,17 +1,16 @@
-// Services/IGmailService.cs + GmailService.cs
-// Handles Gmail API integration using Google.Apis.Gmail.v1.
-// Scans for school-related emails using configurable filter keywords.
-// Uses OAuth 2.0 with automatic token refresh via Google.Apis.Auth.
-
+﻿// Services/IGmailService.cs + GmailService.cs
 using System.Diagnostics;
 using System.Text;
 using EduAutomation.Exceptions;
 using EduAutomation.Models;
+using Google.Apis.Auth.OAuth2;
+using Google.Apis.Gmail.v1;
+using Google.Apis.Gmail.v1.Data;
+using Google.Apis.Services;
+using Google.Apis.Util.Store;
 
 namespace EduAutomation.Services
 {
-    // ---- Interface ----
-
     public interface IGmailService
     {
         Task<bool> AuthenticateAsync(CancellationToken ct = default);
@@ -20,19 +19,15 @@ namespace EduAutomation.Services
         void SignOut();
     }
 
-    // ---- Implementation ----
-
     public class GmailService : IGmailService
     {
         private const string Source          = "GmailService";
         private const string ApplicationName = "EduAutomation";
         private const string UserId          = "me";
 
-        // OAuth scopes required. Read-only to minimize permissions.
         private static readonly string[] Scopes = { Google.Apis.Gmail.v1.GmailService.Scope.GmailReadonly };
 
-        // Keywords used to identify school-related emails.
-        private static readonly string[] SchoolKeywords = new[]
+        private static readonly string[] SchoolKeywords =
         {
             "canvas", "lms", "assignment", "grade", "gradebook", "missing", "late",
             "teacher", "school", "class", "homework", "project", "test", "exam",
@@ -42,15 +37,14 @@ namespace EduAutomation.Services
         private readonly ILoggingService _log;
         private Google.Apis.Gmail.v1.GmailService? _service;
         private UserCredential? _credential;
-        private string _credentialStorePath;
+        private readonly string _credentialStorePath;
 
         public GmailService(ILoggingService log)
         {
             _log = log;
             _credentialStorePath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "EduAutomation",
-                "GoogleCredentials");
+                "EduAutomation", "GoogleCredentials");
             Directory.CreateDirectory(_credentialStorePath);
         }
 
@@ -58,13 +52,9 @@ namespace EduAutomation.Services
         {
             _log.LogInfo(Source, "Starting Google OAuth authentication flow...");
             var sw = Stopwatch.StartNew();
-
             try
             {
-                // Load the OAuth client secrets from embedded resources.
-                // The google_credentials.json file must be in Resources/Raw/.
                 using Stream credStream = await GetCredentialStreamAsync();
-
                 _credential = await GoogleWebAuthorizationBroker.AuthorizeAsync(
                     GoogleClientSecrets.FromStream(credStream).Secrets,
                     Scopes,
@@ -72,37 +62,35 @@ namespace EduAutomation.Services
                     taskCancellationToken: ct,
                     dataStore: new FileDataStore(_credentialStorePath, fullPath: true));
 
-                // Pre-emptively refresh the token if it is within 5 minutes of expiry.
                 if (_credential.Token.IsStale)
                 {
-                    _log.LogInfo(Source, "Token is stale. Refreshing before use...");
+                    _log.LogInfo(Source, "Token is stale â€” refreshing...");
                     bool refreshed = await _credential.RefreshTokenAsync(ct);
                     if (!refreshed)
                     {
                         _log.LogError(Source, "Token refresh failed. Re-authentication required.");
                         return false;
                     }
-                    _log.LogInfo(Source, "Token refreshed successfully.");
                 }
 
                 _service = new Google.Apis.Gmail.v1.GmailService(new BaseClientService.Initializer
                 {
                     HttpClientInitializer = _credential,
-                    ApplicationName      = ApplicationName
+                    ApplicationName       = ApplicationName
                 });
 
                 sw.Stop();
-                _log.LogInfo(Source, $"Gmail authentication successful in {sw.ElapsedMilliseconds}ms.");
+                _log.LogInfo(Source, $"Gmail auth OK in {sw.ElapsedMilliseconds}ms.");
                 return true;
             }
             catch (Google.Apis.Auth.OAuth2.Responses.TokenResponseException ex)
             {
-                _log.LogError(Source, $"Google OAuth token error: {ex.Error.Error}", ex);
+                _log.LogError(Source, $"OAuth token error: {ex.Error.Error}", ex);
                 return false;
             }
             catch (Exception ex)
             {
-                _log.LogError(Source, "Unexpected error during Gmail authentication.", ex);
+                _log.LogError(Source, "Unexpected error during Gmail auth.", ex);
                 return false;
             }
         }
@@ -111,34 +99,18 @@ namespace EduAutomation.Services
         {
             if (_credential == null || _service == null) return false;
             if (!_credential.Token.IsStale) return true;
-
-            _log.LogInfo(Source, "Refreshing stale Gmail OAuth token...");
-            try
-            {
-                return await _credential.RefreshTokenAsync(CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                _log.LogError(Source, "Failed to refresh Gmail token.", ex);
-                return false;
-            }
+            try { return await _credential.RefreshTokenAsync(CancellationToken.None); }
+            catch (Exception ex) { _log.LogError(Source, "Token refresh failed.", ex); return false; }
         }
 
         public void SignOut()
         {
-            _log.LogInfo(Source, "Signing out of Gmail and clearing stored credentials.");
+            _log.LogInfo(Source, "Signing out of Gmail.");
             try
             {
-                // BUG FIX: Was calling _credential.RevokeTokenAsync(...).Wait(5000),
-                // which blocks the calling thread. In a MAUI UI context this can
-                // deadlock because the async continuation needs the UI thread to
-                // resume. Use GetAwaiter().GetResult() on a background-safe path,
-                // or fire-and-forget with a timeout via Task.Run.
                 if (_credential != null)
-                {
                     Task.Run(() => _credential.RevokeTokenAsync(CancellationToken.None))
                         .Wait(TimeSpan.FromSeconds(5));
-                }
 
                 string tokenFile = Path.Combine(_credentialStorePath,
                     "Google.Apis.Auth.OAuth2.Responses.TokenResponse-student");
@@ -146,96 +118,69 @@ namespace EduAutomation.Services
                 _service    = null;
                 _credential = null;
             }
-            catch (Exception ex)
-            {
-                _log.LogError(Source, "Error during Gmail sign-out.", ex);
-            }
+            catch (Exception ex) { _log.LogError(Source, "Error during sign-out.", ex); }
         }
 
         public async Task<List<EmailAlert>> GetSchoolEmailsAsync(
-            int maxResults = 20,
-            CancellationToken ct = default)
+            int maxResults = 20, CancellationToken ct = default)
         {
-            _log.LogInfo(Source, $"Fetching up to {maxResults} school-related emails...");
+            _log.LogInfo(Source, $"Fetching up to {maxResults} school emails...");
             var result = new List<EmailAlert>();
-            var sw = Stopwatch.StartNew();
+            var sw     = Stopwatch.StartNew();
 
             if (!await IsAuthenticatedAsync())
-            {
-                _log.LogError(Source, "Cannot fetch emails: not authenticated with Gmail.");
                 throw new ServiceUnavailableException("Gmail",
-                    "Gmail authentication required. Please connect your Google account in Settings.");
-            }
+                    "Gmail authentication required. Connect your Google account in Settings.");
 
             try
             {
-                // Build a Gmail query to filter for potentially school-related emails.
-                string query = "is:unread newer_than:7d";
+                var listReq = _service!.Users.Messages.List(UserId);
+                listReq.Q          = "is:unread newer_than:7d";
+                listReq.MaxResults = maxResults * 3;
 
-                var listRequest = _service!.Users.Messages.List(UserId);
-                listRequest.Q          = query;
-                listRequest.MaxResults = maxResults * 3; // Fetch extra since we filter by keyword.
-
-                ListMessagesResponse listResponse = await listRequest.ExecuteAsync(ct);
+                ListMessagesResponse listResp = await listReq.ExecuteAsync(ct);
                 sw.Stop();
                 _log.LogApiCall(Source, "GET", "users.messages.list", 200, sw.ElapsedMilliseconds);
 
-                if (listResponse.Messages == null || !listResponse.Messages.Any())
+                if (listResp.Messages == null || !listResp.Messages.Any())
                 {
-                    _log.LogInfo(Source, "No new emails found matching the query.");
+                    _log.LogInfo(Source, "No new emails found.");
                     return result;
                 }
 
-                // Fetch each message's details and filter for school content.
                 int processed = 0;
-                foreach (var messageRef in listResponse.Messages)
+                foreach (var msgRef in listResp.Messages)
                 {
                     if (result.Count >= maxResults) break;
                     ct.ThrowIfCancellationRequested();
-
                     try
                     {
-                        var msgSw = Stopwatch.StartNew();
-                        var getRequest = _service.Users.Messages.Get(UserId, messageRef.Id);
-                        getRequest.Format = UsersResource.MessagesResource.GetRequest.FormatEnum.Full;
-                        Message message = await getRequest.ExecuteAsync(ct);
-                        msgSw.Stop();
-                        _log.LogApiCall(Source, "GET", $"users.messages.get/{messageRef.Id}",
-                            200, msgSw.ElapsedMilliseconds);
-
-                        EmailAlert? alert = ParseMessage(message);
+                        var getReq = _service.Users.Messages.Get(UserId, msgRef.Id);
+                        getReq.Format = UsersResource.MessagesResource.GetRequest.FormatEnum.Full;
+                        Message msg = await getReq.ExecuteAsync(ct);
+                        EmailAlert? alert = ParseMessage(msg);
                         if (alert != null && IsSchoolRelated(alert))
-                        {
-                            alert.IsSchoolRelated = true;
-                            result.Add(alert);
-                        }
+                        { alert.IsSchoolRelated = true; result.Add(alert); }
                         processed++;
                     }
                     catch (Google.GoogleApiException ex) when ((int)ex.HttpStatusCode == 429)
                     {
-                        _log.LogWarning(Source,
-                            $"Gmail rate limit hit after {processed} messages. " +
-                            "Returning partial results. Retry in 1 minute.");
+                        _log.LogWarning(Source, "Gmail rate limit hit. Returning partial results.");
                         break;
                     }
                     catch (Exception ex)
-                    {
-                        _log.LogError(Source,
-                            $"Failed to fetch message ID {messageRef.Id}. Skipping.", ex);
-                    }
+                    { _log.LogError(Source, $"Failed to fetch message {msgRef.Id}.", ex); }
                 }
 
                 result = result.OrderByDescending(e => e.ReceivedAt).ToList();
-                _log.LogInfo(Source,
-                    $"Returned {result.Count} school-related emails from {processed} processed.");
-
+                _log.LogInfo(Source, $"Returned {result.Count} school emails from {processed} processed.");
                 return result;
             }
+            catch (ServiceUnavailableException) { throw; }
             catch (Exception ex)
             {
-                _log.LogError(Source, "Error fetching emails from Gmail.", ex);
-                throw new ServiceUnavailableException("Gmail",
-                    "Failed to retrieve emails from Gmail.", ex);
+                _log.LogError(Source, "Error fetching Gmail messages.", ex);
+                throw new ServiceUnavailableException("Gmail", "Failed to retrieve emails.", ex);
             }
         }
 
@@ -244,14 +189,10 @@ namespace EduAutomation.Services
             try
             {
                 var headers = message.Payload?.Headers ?? new List<MessagePartHeader>();
-                string subject = headers.FirstOrDefault(h => h.Name == "Subject")?.Value ?? "(No Subject)";
-                string from    = headers.FirstOrDefault(h => h.Name == "From")?.Value   ?? "Unknown Sender";
-                string dateStr = headers.FirstOrDefault(h => h.Name == "Date")?.Value   ?? string.Empty;
-
-                DateTimeOffset receivedAt = DateTimeOffset.TryParse(dateStr, out var parsed)
-                    ? parsed : DateTimeOffset.UtcNow;
-
-                string bodyText = ExtractBodyText(message.Payload);
+                string subject  = headers.FirstOrDefault(h => h.Name == "Subject")?.Value ?? "(No Subject)";
+                string from     = headers.FirstOrDefault(h => h.Name == "From")?.Value   ?? "Unknown";
+                string dateStr  = headers.FirstOrDefault(h => h.Name == "Date")?.Value   ?? string.Empty;
+                DateTimeOffset receivedAt = DateTimeOffset.TryParse(dateStr, out var p) ? p : DateTimeOffset.UtcNow;
 
                 return new EmailAlert
                 {
@@ -260,17 +201,13 @@ namespace EduAutomation.Services
                     Subject        = subject,
                     Sender         = from,
                     SnippetPreview = message.Snippet ?? string.Empty,
-                    FullBodyText   = bodyText,
+                    FullBodyText   = ExtractBodyText(message.Payload),
                     ReceivedAt     = receivedAt,
                     IsRead         = !(message.LabelIds?.Contains("UNREAD") ?? false),
                     Labels         = message.LabelIds?.ToList() ?? new List<string>()
                 };
             }
-            catch (Exception ex)
-            {
-                _log.LogError(Source, $"Failed to parse message {message.Id}.", ex);
-                return null;
-            }
+            catch (Exception ex) { _log.LogError(Source, $"Parse failed for {message.Id}.", ex); return null; }
         }
 
         private static string ExtractBodyText(MessagePart? part)
@@ -278,50 +215,54 @@ namespace EduAutomation.Services
             if (part == null) return string.Empty;
             if (part.Body?.Data != null)
             {
-                // BUG FIX: The Gmail API returns URL-safe base64 (RFC 4648 §5) which
-                // replaces '+' with '-' and '/' with '_', and may omit '=' padding.
-                // Convert.FromBase64String requires standard base64 WITH padding.
-                // Previously missing the padding step caused FormatException for any
-                // message whose body length was not a multiple of 3 bytes.
-                string base64 = part.Body.Data.Replace('-', '+').Replace('_', '/');
-                int pad = base64.Length % 4;
-                if (pad > 0)
-                    base64 = base64.PadRight(base64.Length + (4 - pad), '=');
-
-                byte[] data = Convert.FromBase64String(base64);
-                return Encoding.UTF8.GetString(data);
+                string b64 = part.Body.Data.Replace('-', '+').Replace('_', '/');
+                int pad = b64.Length % 4;
+                if (pad > 0) b64 = b64.PadRight(b64.Length + (4 - pad), '=');
+                return Encoding.UTF8.GetString(Convert.FromBase64String(b64));
             }
             if (part.Parts != null)
             {
-                var textPart = part.Parts.FirstOrDefault(p =>
+                var txt = part.Parts.FirstOrDefault(p =>
                     p.MimeType == "text/plain" || p.MimeType == "text/html");
-                return ExtractBodyText(textPart);
+                return ExtractBodyText(txt);
             }
             return string.Empty;
         }
 
         private static bool IsSchoolRelated(EmailAlert alert)
         {
-            string combined = (alert.Subject + " " + alert.SnippetPreview + " " + alert.Sender)
-                .ToLowerInvariant();
-            return SchoolKeywords.Any(keyword => combined.Contains(keyword));
+            string combined = (alert.Subject + " " + alert.SnippetPreview + " " + alert.Sender).ToLowerInvariant();
+            return SchoolKeywords.Any(k => combined.Contains(k));
         }
 
-        // Loads the google_credentials.json from the app's raw assets.
         private static async Task<Stream> GetCredentialStreamAsync()
         {
-            // In .NET MAUI, bundled raw assets are accessed via FileSystem.OpenAppPackageFileAsync.
-            try
-            {
-                return await Microsoft.Maui.Storage.FileSystem.OpenAppPackageFileAsync(
-                    "google_credentials.json");
-            }
+            try { return await Microsoft.Maui.Storage.FileSystem.OpenAppPackageFileAsync("google_credentials.json"); }
             catch (Exception ex)
             {
                 throw new ServiceUnavailableException("Gmail",
-                    "google_credentials.json not found in app package. " +
-                    "Ensure it is added to Resources/Raw/ with Build Action = MauiAsset.", ex);
+                    "google_credentials.json not found in Resources/Raw/. Add it with Build Action = MauiAsset.", ex);
             }
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

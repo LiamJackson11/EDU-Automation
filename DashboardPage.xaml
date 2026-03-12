@@ -8,9 +8,7 @@
     xmlns:vm="clr-namespace:EduAutomation.ViewModels"
     Title="Dashboard">
 
-    <ContentPage.BindingContext>
-        <vm:DashboardViewModel />
-    </ContentPage.BindingContext>
+
 
     <ScrollView>
         <VerticalStackLayout Padding="20" Spacing="16">

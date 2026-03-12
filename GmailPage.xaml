@@ -1,0 +1,72 @@
+
+          <ContentPage
+    xmlns:models="clr-namespace:EduAutomation.Models"
+    x:Class="EduAutomation.Views.GmailPage"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             
+             Title="Gmail">
+             
+    <Grid RowDefinitions="Auto,*,Auto" Padding="16" RowSpacing="12">
+
+
+        <!-- Connect / Disconnect Header -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+            <Label Grid.Column="0"
+                   Text="{Binding IsAuthenticated, Converter={StaticResource BoolToColorConverter}}"
+                   FontSize="14" VerticalOptions="Center" />
+            <Button Grid.Column="1"
+                    Text="{Binding IsAuthenticated, Converter={StaticResource BoolToColorConverter}}"
+                    Command="{Binding ConnectGmailCommand}"
+                    BackgroundColor="#3f51b5" TextColor="White"
+                    CornerRadius="8" HeightRequest="40"
+                    IsVisible="{Binding IsAuthenticated, Converter={StaticResource InvertBoolConverter}}" />
+            <Button Grid.Column="1"
+                    Text="Disconnect"
+                    Command="{Binding DisconnectGmailCommand}"
+                    BackgroundColor="#f44336" TextColor="White"
+                    CornerRadius="8" HeightRequest="40"
+                    IsVisible="{Binding IsAuthenticated}" />
+        </Grid>
+
+
+        <!-- Email List -->
+        <CollectionView Grid.Row="1"
+                        ItemsSource="{Binding Emails}"
+                        SelectedItem="{Binding SelectedEmail}"
+                        SelectionMode="Single"
+                        EmptyView="No school-related emails found. Connect your Gmail account above.">
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border Padding="14,10" Margin="0,4"
+                            StrokeShape="RoundRectangle 10"
+                            BackgroundColor="{AppThemeBinding Light=White, Dark=#1e1e2e}">
+                        <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
+                            <Label Grid.Row="0" Text="{Binding Subject}"
+                                   FontSize="14" FontAttributes="Bold"
+                                   MaxLines="1" LineBreakMode="TailTruncation" />
+                            <Label Grid.Row="1" Text="{Binding Sender}"
+                                   FontSize="12" TextColor="Gray" />
+                            <Label Grid.Row="2" Text="{Binding SnippetPreview}"
+                                   FontSize="12" TextColor="DarkGray"
+                                   MaxLines="2" LineBreakMode="TailTruncation" />
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+
+
+        <!-- Refresh Button -->
+        <Button Grid.Row="2"
+                Text="Refresh Emails"
+                Command="{Binding LoadEmailsCommand}"
+                IsEnabled="{Binding IsNotBusy}"
+                IsVisible="{Binding IsAuthenticated}"
+                BackgroundColor="#3f51b5" TextColor="White"
+                CornerRadius="8" HeightRequest="44" />
+
+
+    </Grid>
+</ContentPage>
+

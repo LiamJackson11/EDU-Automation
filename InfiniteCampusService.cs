@@ -18,7 +18,7 @@
 //
 // Session management:
 //   - IC sessions expire after ~30 minutes; re-auth fires at 25 minutes.
-
+using HtmlAgilityPack;
 using System.Diagnostics;
 using System.Net;
 using System.Text.RegularExpressions;
